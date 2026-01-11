@@ -1,0 +1,315 @@
+---
+# 00-destroy-cluster.yml - Destroy OKD cluster and cleanup resources
+#
+# This playbook:
+#   1. Cleans up oVirt resources (VMs, templates, disks)
+#   2. Removes HAProxy configuration from pfSense
+#   3. Removes DNS records from CoreDNS
+#   4. Cleans up local install directory
+#
+# Usage:
+#   ansible-playbook playbooks/00-destroy-cluster.yml -e @vars/okd-agent.yml
+#   ansible-playbook playbooks/00-destroy-cluster.yml -e @vars/okd-agent.yml -e confirm_destroy=true
+#
+# WARNING: This will permanently delete the cluster!
+# =============================================================================
+
+- name: Destroy OKD Cluster - oVirt Cleanup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    confirm_destroy: false
+
+  tasks:
+    # =========================================================================
+    # SAFETY CHECK
+    # =========================================================================
+    - name: Safety check - require confirmation
+      ansible.builtin.fail:
+        msg: |
+          ============================================
+          WARNING: This will DESTROY the OKD cluster!
+          ============================================
+
+          To confirm destruction, run:
+            ansible-playbook playbooks/00-destroy-cluster.yml \
+              -e @vars/okd-agent.yml \
+              -e confirm_destroy=true
+
+          ============================================
+      when: not confirm_destroy | bool
+
+    - name: Display destruction warning
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "DESTROYING OKD CLUSTER"
+          - "=============================================="
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - "This cannot be undone!"
+          - "=============================================="
+
+    # =========================================================================
+    # OVIRT CLEANUP
+    # =========================================================================
+    - name: Authenticate to oVirt Engine
+      ovirt.ovirt.ovirt_auth:
+        url: "{{ ovirt_engine_url }}"
+        username: "{{ ovirt_engine_user }}"
+        password: "{{ ovirt_engine_password }}"
+        insecure: "{{ ovirt_engine_insecure }}"
+      register: ovirt_auth
+
+    - name: Find OKD VMs
+      ovirt.ovirt.ovirt_vm_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ cluster_name }}*"
+      register: okd_vms
+
+    - name: Stop OKD VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        state: stopped
+        wait: true
+      loop: "{{ okd_vms.ovirt_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: okd_vms.ovirt_vms | length > 0
+      failed_when: false
+
+    - name: Remove OKD VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ okd_vms.ovirt_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: okd_vms.ovirt_vms | length > 0
+      failed_when: false
+
+    - name: Display VM cleanup status
+      ansible.builtin.debug:
+        msg: "Removed {{ okd_vms.ovirt_vms | length }} VM(s)"
+
+    - name: Find OKD disks (including ISO)
+      ovirt.ovirt.ovirt_disk_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ cluster_name }}*"
+      register: okd_disks
+
+    - name: Remove OKD disks
+      ovirt.ovirt.ovirt_disk:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        id: "{{ item.id }}"
+        state: absent
+      loop: "{{ okd_disks.ovirt_disks | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: okd_disks.ovirt_disks | default([]) | length > 0
+      failed_when: false
+
+    - name: Display disk cleanup status
+      ansible.builtin.debug:
+        msg: "Removed {{ okd_disks.ovirt_disks | default([]) | length }} disk(s)"
+
+    - name: Revoke oVirt SSO token
+      ovirt.ovirt.ovirt_auth:
+        state: absent
+        ovirt_auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+
+# =============================================================================
+# HAPROXY CLEANUP ON PFSENSE
+# =============================================================================
+- name: Remove HAProxy configuration from pfSense
+  hosts: pfsense
+  gather_facts: false
+
+  tasks:
+    - name: Remove OKD HAProxy frontends
+      pfsensible.core.pfsense_phpshell:
+        cmd: |
+          require_once("config.inc");
+          require_once("util.inc");
+          require_once("haproxy/haproxy.inc");
+
+          global $config;
+
+          $frontends_to_remove = array(
+              'okd-api-frontend',
+              'okd-mcs-frontend',
+              'okd-http-frontend',
+              'okd-https-frontend'
+          );
+
+          $removed = 0;
+          if (isset($config['installedpackages']['haproxy']['ha_backends']['item'])) {
+              $new_items = array();
+              foreach ($config['installedpackages']['haproxy']['ha_backends']['item'] as $fe) {
+                  if (!in_array($fe['name'], $frontends_to_remove)) {
+                      $new_items[] = $fe;
+                  } else {
+                      $removed++;
+                  }
+              }
+              $config['installedpackages']['haproxy']['ha_backends']['item'] = $new_items;
+          }
+
+          if ($removed > 0) {
+              write_config("OKD HAProxy frontends removed via Ansible");
+              echo "OK: Removed $removed frontend(s)\n";
+          } else {
+              echo "OK: No frontends to remove\n";
+          }
+      register: frontend_cleanup
+      changed_when: "'Removed' in frontend_cleanup.stdout"
+      failed_when: false
+
+    - name: Remove OKD backend servers
+      pfsensible.core.pfsense_haproxy_backend_server:
+        backend: "{{ item.backend }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop:
+        - { backend: "okd-api-backend", name: "master-0" }
+        - { backend: "okd-api-backend", name: "master-1" }
+        - { backend: "okd-api-backend", name: "master-2" }
+        - { backend: "okd-mcs-backend", name: "master-0" }
+        - { backend: "okd-mcs-backend", name: "master-1" }
+        - { backend: "okd-mcs-backend", name: "master-2" }
+        - { backend: "okd-http-backend", name: "ingress-0" }
+        - { backend: "okd-http-backend", name: "ingress-1" }
+        - { backend: "okd-http-backend", name: "ingress-2" }
+        - { backend: "okd-https-backend", name: "ingress-0" }
+        - { backend: "okd-https-backend", name: "ingress-1" }
+        - { backend: "okd-https-backend", name: "ingress-2" }
+      failed_when: false
+
+    - name: Remove OKD HAProxy backends
+      pfsensible.core.pfsense_haproxy_backend:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - okd-api-backend
+        - okd-mcs-backend
+        - okd-http-backend
+        - okd-https-backend
+      failed_when: false
+
+    - name: Reload HAProxy
+      pfsensible.core.pfsense_phpshell:
+        cmd: |
+          require_once("haproxy/haproxy.inc");
+          haproxy_check_and_run($savemsg, true);
+          echo "OK: HAProxy reloaded\n";
+      register: haproxy_reload
+      changed_when: false
+      failed_when: false
+
+    - name: Display HAProxy cleanup status
+      ansible.builtin.debug:
+        msg: "{{ frontend_cleanup.stdout | default('HAProxy cleanup complete') }}"
+
+    - name: Remove OKD Virtual IPs
+      pfsensible.core.pfsense_phpshell:
+        cmd: |
+          require_once("config.inc");
+          require_once("util.inc");
+          require_once("interfaces.inc");
+
+          global $config;
+
+          $api_vip = '{{ api_vip }}';
+          $ingress_vip = '{{ ingress_vip }}';
+
+          $removed = 0;
+          if (isset($config['virtualip']['vip']) && is_array($config['virtualip']['vip'])) {
+              $new_vips = array();
+              foreach ($config['virtualip']['vip'] as $vip) {
+                  if (isset($vip['subnet']) && ($vip['subnet'] == $api_vip || $vip['subnet'] == $ingress_vip)) {
+                      echo "Removing VIP: {$vip['subnet']}\n";
+                      $removed++;
+                      continue;
+                  }
+                  $new_vips[] = $vip;
+              }
+              $config['virtualip']['vip'] = $new_vips;
+          }
+
+          if ($removed > 0) {
+              write_config("OKD Virtual IPs removed via Ansible");
+              shell_exec("ifconfig vtnet1 -alias $api_vip 2>/dev/null");
+              shell_exec("ifconfig vtnet1 -alias $ingress_vip 2>/dev/null");
+              echo "OK: Removed $removed VIP(s)\n";
+          } else {
+              echo "OK: No VIPs to remove\n";
+          }
+      register: vip_cleanup
+      changed_when: "'Removing VIP' in vip_cleanup.stdout"
+      failed_when: false
+
+    - name: Display VIP cleanup status
+      ansible.builtin.debug:
+        msg: "{{ vip_cleanup.stdout | default('VIP cleanup complete') }}"
+
+# =============================================================================
+# LOCAL CLEANUP
+# =============================================================================
+- name: Local cleanup
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Remove DNS records from CoreDNS
+      ansible.builtin.command:
+        cmd: >
+          ansible-playbook
+          -i /root/learning/cluster/coredns/inventory.ini
+          /root/learning/cluster/coredns/playbooks/update-okd-dns.yml
+          -e okd_cluster_name={{ cluster_name }}
+          -e okd_api_vip={{ api_vip }}
+          -e okd_ingress_vip={{ ingress_vip }}
+          -e okd_dns_state=absent
+      register: dns_cleanup
+      failed_when: false
+
+    - name: Display DNS cleanup status
+      ansible.builtin.debug:
+        msg: "CoreDNS cleanup: {{ 'OK' if dns_cleanup.rc == 0 else 'SKIPPED (playbook not found)' }}"
+
+    - name: Remove OKD entries from /etc/hosts
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - OKD {{ cluster_name }}"
+        state: absent
+      become: true
+      failed_when: false
+
+    - name: Clean up install directory
+      ansible.builtin.file:
+        path: "{{ okd_install_dir }}"
+        state: absent
+
+    - name: Recreate empty install directory
+      ansible.builtin.file:
+        path: "{{ okd_install_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD Cluster Destroyed"
+          - "=============================================="
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - ""
+          - "Cleanup Summary:"
+          - "  oVirt: VMs and disks removed"
+          - "  pfSense: HAProxy configuration removed"
+          - "  DNS: Records removed from CoreDNS"
+          - "  Local: Install directory cleaned"
+          - "=============================================="

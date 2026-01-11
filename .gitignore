@@ -1,0 +1,112 @@
+# =============================================================================
+# OKD Agent-based Installation Project - .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Ansible
+# -----------------------------------------------------------------------------
+*.retry
+.ansible/
+
+# Ansible collections (install via: ansible-galaxy collection install -r requirements.yml -p ./collections)
+collections/
+
+# Host vars may contain sensitive SSH settings
+# inventory/host_vars/
+
+# -----------------------------------------------------------------------------
+# OKD Installation Artifacts
+# -----------------------------------------------------------------------------
+# Install directory contents (generated manifests, secrets, kubeconfig)
+# Keep the directory but ignore contents
+install/*
+!install/.gitkeep
+
+# Agent ISO files
+*.iso
+
+# OKD binaries (large files - download separately)
+tools/oc
+tools/openshift-install
+tools/kubectl
+tools/*.tar.gz
+tools/*.bak
+tools/old-*/
+
+# -----------------------------------------------------------------------------
+# Secrets & Credentials
+# -----------------------------------------------------------------------------
+# Pull secret (contains registry auth)
+pull-secret.json
+
+# oVirt credentials
+ovirt-config.yaml
+**/ovirt-config.yaml
+
+# Auto-generated oVirt IDs (contains cluster-specific IDs)
+vars/ovirt-ids.yml
+
+# Auto-generated node IPs during deployment
+vars/node-ips.yml
+
+# Kubeconfig and auth files
+auth/
+**/kubeconfig
+**/kubeadmin-password
+
+# SSH keys
+*.pem
+id_rsa
+id_rsa.pub
+
+# -----------------------------------------------------------------------------
+# Terraform (used by openshift-install)
+# -----------------------------------------------------------------------------
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+*.auto.tfvars
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+.openshift_install.log
+.openshift_install_state.json
+
+# -----------------------------------------------------------------------------
+# Temporary Files
+# -----------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+
+# -----------------------------------------------------------------------------
+# OS & Editor
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+*.code-workspace
+
+# -----------------------------------------------------------------------------
+# Claude Code
+# -----------------------------------------------------------------------------
+.claude/
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+venv/
+.venv/

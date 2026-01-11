@@ -1,0 +1,113 @@
+---
+# OKD IPI (Installer Provisioned Infrastructure) Configuration
+# =============================================================================
+# This configuration is used by the openshift-install to deploy OKD on oVirt
+#
+# Prerequisites:
+#   - oVirt 4.4+
+#   - DHCP-enabled network
+#   - DNS records configured (api.*, api-int.*, *.apps.*)
+#   - Sufficient resources (28 vCPUs, 112GB RAM, 840GB storage)
+#
+# Usage:
+#   ansible-playbook site.yml -e @vars/okd-ipi.yml
+# =============================================================================
+
+# =============================================================================
+# CLUSTER IDENTITY
+# =============================================================================
+cluster_name: "mgmt-devops-okd"
+base_domain: "engatwork.com"
+# Full cluster domain: mgmt-devops-okd.engatwork.com
+
+# =============================================================================
+# OKD VERSION
+# =============================================================================
+# Check releases at: https://github.com/okd-project/okd/releases
+# Using OKD 4.13 - the last version with oVirt IPI support
+okd_version: "4.13.0-0.okd-2023-10-28-065448"
+
+# =============================================================================
+# OVIRT CONNECTION
+# =============================================================================
+ovirt_engine_fqdn: "ovirt.engatwork.com"
+ovirt_engine_url: "https://{{ ovirt_engine_fqdn }}/ovirt-engine/api"
+ovirt_engine_user: "admin@ovirt@internalsso"
+ovirt_engine_password: "unix"
+ovirt_engine_insecure: true  # Skip TLS verification (self-signed cert)
+
+# oVirt Resource IDs (fetched by prerequisites playbook)
+# These are auto-populated by 01-prerequisites.yml into vars/ovirt-ids.yml
+# Do not set them here - they will be loaded from ovirt-ids.yml
+
+# oVirt Resource Names (used to lookup IDs)
+ovirt_cluster_name: "Default"
+ovirt_storage_domain_name: "data_lun"
+ovirt_network_name: "Mgmt-DevOps-Net"
+
+# =============================================================================
+# NETWORK CONFIGURATION
+# =============================================================================
+# VIPs must be unused IPs on the machine network with DHCP reservations
+#
+# KNOWN ISSUE: keepalived VIP bootstrap problem on oVirt
+#   The keepalived-monitor needs to reach the API via VIP to generate its
+#   configuration, but the VIP isn't assigned until the config is generated.
+#   The install playbook (04-install-okd.yml) includes an automatic workaround
+#   that adds VIPs to the master's br-ex interface during installation.
+#   If needed, you can also run: ansible-playbook playbooks/04a-fix-vip.yml
+#
+api_vip: "10.10.2.50"
+ingress_vip: "10.10.2.51"
+machine_network_cidr: "10.10.2.0/24"
+
+# Cluster internal networks
+cluster_network_cidr: "10.128.0.0/14"
+cluster_network_host_prefix: 23
+service_network_cidr: "172.30.0.0/16"
+
+# =============================================================================
+# CLUSTER SIZING
+# =============================================================================
+# Control plane: 1 node (Single Node OpenShift)
+control_plane_replicas: 1
+control_plane_cores: 8
+control_plane_memory_mb: 32768
+control_plane_disk_gb: 120
+
+# Compute/Worker nodes
+# Set to 0 for compact cluster (masters are schedulable)
+compute_replicas: 2
+compute_cores: 4
+compute_memory_mb: 16384
+compute_disk_gb: 120
+
+# =============================================================================
+# SSH & AUTHENTICATION
+# =============================================================================
+ssh_public_key_file: "/root/.ssh/id_rsa.pub"
+pull_secret_file: "/root/learning/okd/pull-secret.json"
+
+# =============================================================================
+# INSTALLATION PATHS
+# =============================================================================
+okd_tools_dir: "/root/learning/okd/tools"
+okd_install_dir: "/root/learning/okd/install"
+
+# openshift-install binary
+openshift_install_binary: "{{ okd_tools_dir }}/openshift-install"
+oc_binary: "{{ okd_tools_dir }}/oc"
+
+# =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+# CoreDNS server on mgmt-core k8s cluster
+dns_server: "10.10.1.200"
+
+# =============================================================================
+# RESOURCE REQUIREMENTS (for validation)
+# =============================================================================
+# Minimum requirements for IPI installation
+min_vcpus: 28          # 4 per VM × 7 VMs (bootstrap + 3 masters + 3 workers)
+min_memory_gb: 112     # 16GB per VM × 7 VMs
+min_storage_gb: 840    # 120GB per VM × 7 VMs

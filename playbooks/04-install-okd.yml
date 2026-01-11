@@ -1,0 +1,451 @@
+---
+# 04-install-okd.yml - Run openshift-install to create OKD cluster
+#
+# This playbook runs the openshift-install binary to create the cluster.
+# The installer will:
+#   1. Create bootstrap VM
+#   2. Create control plane VMs
+#   3. Create compute VMs
+#   4. Bootstrap the cluster
+#   5. Remove bootstrap VM when complete
+#
+# WORKAROUND: This playbook includes a fix for the keepalived VIP
+# chicken-and-egg problem where keepalived needs to reach the API
+# via VIP to generate its config, but VIP isn't configured yet.
+# Reference: https://github.com/okd-project/okd/issues/1278
+#
+# Usage:
+#   ansible-playbook playbooks/04-install-okd.yml -e @vars/okd-ipi.yml
+#
+# Note: This can take 30-60 minutes to complete
+
+- name: Install OKD Cluster on oVirt
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  collections:
+    - ovirt.ovirt
+    - kubernetes.core
+    - community.okd
+
+  vars_files:
+    - ../vars/okd-ipi.yml
+
+  vars:
+    # SSH key for connecting to CoreOS nodes
+    ssh_private_key: "{{ ssh_public_key_file | regex_replace('\\.pub$', '') }}"
+    # Timeout for waiting for VMs (in seconds)
+    vm_wait_timeout: 1200
+    # Timeout for bootstrap completion (in seconds)
+    bootstrap_timeout: 2400
+    # How long to wait for VM to get IP from DHCP
+    vm_ip_wait_retries: 60
+    vm_ip_wait_delay: 10
+
+  environment:
+    OVIRT_CONFIG: "{{ okd_install_dir }}/ovirt-config.yaml"
+
+  tasks:
+    # =========================================================================
+    # PRE-FLIGHT CHECKS
+    # =========================================================================
+    - name: Check install-config.yaml exists
+      ansible.builtin.stat:
+        path: "{{ okd_install_dir }}/install-config.yaml"
+      register: install_config
+
+    - name: Fail if install-config.yaml not found
+      ansible.builtin.fail:
+        msg: |
+          install-config.yaml not found!
+          Run: ansible-playbook playbooks/03-generate-config.yml -e @vars/okd-ipi.yml
+      when: not install_config.stat.exists
+
+    - name: Create oVirt credentials file for installer
+      ansible.builtin.copy:
+        content: |
+          ovirt_url: "{{ ovirt_engine_url }}"
+          ovirt_username: "{{ ovirt_engine_user }}"
+          ovirt_password: "{{ ovirt_engine_password }}"
+          ovirt_insecure: {{ ovirt_engine_insecure | lower }}
+        dest: "{{ okd_install_dir }}/ovirt-config.yaml"
+        mode: '0600'
+
+    # =========================================================================
+    # DNS CONFIGURATION
+    # =========================================================================
+    - name: Add OKD API entries to /etc/hosts for installer DNS resolution
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - OKD {{ cluster_name }}"
+        block: |
+          # OKD API - {{ cluster_name }}.{{ base_domain }}
+          {{ api_vip }} api.{{ cluster_name }}.{{ base_domain }}
+          {{ api_vip }} api-int.{{ cluster_name }}.{{ base_domain }}
+        create: false
+      become: true
+
+    - name: Verify DNS resolution for API endpoint
+      ansible.builtin.shell: |
+        getent hosts api.{{ cluster_name }}.{{ base_domain }} | grep {{ api_vip }}
+      register: dns_verify
+      changed_when: false
+
+    - name: Verify CoreDNS resolution (optional)
+      ansible.builtin.shell: |
+        dig @{{ dns_server }} api.{{ cluster_name }}.{{ base_domain }} +short
+      register: coredns_verify
+      changed_when: false
+      failed_when: false
+
+    - name: Display DNS verification results
+      ansible.builtin.debug:
+        msg:
+          - "DNS Verification:"
+          - "  /etc/hosts: {{ 'OK' if dns_verify.rc == 0 else 'FAILED' }}"
+          - "  CoreDNS ({{ dns_server }}): {{ coredns_verify.stdout | default('N/A') }}"
+
+    # =========================================================================
+    # OVIRT AUTHENTICATION
+    # =========================================================================
+    - name: Authenticate to oVirt Engine
+      ovirt.ovirt.ovirt_auth:
+        url: "{{ ovirt_engine_url }}"
+        username: "{{ ovirt_engine_user }}"
+        password: "{{ ovirt_engine_password }}"
+        insecure: "{{ ovirt_engine_insecure }}"
+      register: ovirt_auth
+
+    # =========================================================================
+    # START INSTALLATION
+    # =========================================================================
+    - name: Display installation start message
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Starting OKD IPI Installation"
+          - "=============================================="
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - "oVirt Engine: {{ ovirt_engine_fqdn }}"
+          - ""
+          - "This will take 30-60 minutes..."
+          - ""
+          - "VIP Workaround: This playbook will automatically"
+          - "configure VIPs on the master node to work around"
+          - "the keepalived bootstrap issue."
+          - ""
+          - "Monitor progress in another terminal:"
+          - "  tail -f {{ okd_install_dir }}/.openshift_install.log"
+          - "=============================================="
+
+    - name: Run openshift-install create cluster (background)
+      ansible.builtin.command:
+        cmd: >
+          {{ openshift_install_binary }} create cluster
+          --dir={{ okd_install_dir }}
+          --log-level=info
+      async: 7200  # 2 hour timeout
+      poll: 0      # Don't wait - run in background
+      register: install_async
+
+    # =========================================================================
+    # DISCOVER MASTER VM IP (using ovirt.ovirt collection)
+    # =========================================================================
+    - name: Wait for master VM to be created and get IP
+      block:
+        - name: Wait for master VM to appear in oVirt
+          ovirt.ovirt.ovirt_vm_info:
+            auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+            pattern: "name={{ cluster_name }}*master-0"
+            fetch_nested: true
+            nested_attributes:
+              - reported_devices
+          register: master_vm_info
+          until: >
+            master_vm_info.ovirt_vms | length > 0 and
+            master_vm_info.ovirt_vms[0].status == 'up'
+          retries: "{{ vm_ip_wait_retries }}"
+          delay: "{{ vm_ip_wait_delay }}"
+
+        - name: Wait for master VM to get IP from DHCP
+          ovirt.ovirt.ovirt_vm_info:
+            auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+            pattern: "name={{ cluster_name }}*master-0"
+            fetch_nested: true
+            nested_attributes:
+              - reported_devices
+          register: master_vm_with_ip
+          until: >
+            master_vm_with_ip.ovirt_vms | length > 0 and
+            master_vm_with_ip.ovirt_vms[0].reported_devices | default([]) | length > 0 and
+            master_vm_with_ip.ovirt_vms[0].reported_devices |
+              selectattr('ips', 'defined') |
+              map(attribute='ips') |
+              flatten |
+              selectattr('address', 'match', '^10\\.') |
+              list | length > 0
+          retries: "{{ vm_ip_wait_retries }}"
+          delay: "{{ vm_ip_wait_delay }}"
+
+        - name: Extract master IP from VM info
+          ansible.builtin.set_fact:
+            master_ip: >-
+              {{ master_vm_with_ip.ovirt_vms[0].reported_devices |
+                 selectattr('ips', 'defined') |
+                 map(attribute='ips') |
+                 flatten |
+                 selectattr('address', 'match', '^10\\.') |
+                 map(attribute='address') |
+                 first }}
+      rescue:
+        - name: Master VM discovery failed - display warning
+          ansible.builtin.debug:
+            msg:
+              - "WARNING: Could not discover master VM IP automatically"
+              - "VIP workaround will be skipped"
+              - "You may need to run 04a-fix-vip.yml manually"
+
+    - name: Display discovered master IP
+      ansible.builtin.debug:
+        msg: "Discovered master VM IP: {{ master_ip | default('Not found') }}"
+
+    # =========================================================================
+    # VIP WORKAROUND (fixes keepalived chicken-and-egg issue)
+    # =========================================================================
+    - name: Apply VIP workaround on master node
+      when: master_ip is defined and master_ip | length > 0
+      block:
+        - name: Wait for master VM to be SSH accessible
+          ansible.builtin.wait_for:
+            host: "{{ master_ip }}"
+            port: 22
+            timeout: "{{ vm_wait_timeout }}"
+            state: started
+
+        - name: Wait for br-ex interface to be ready
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'for i in $(seq 1 60); do ip link show br-ex >/dev/null 2>&1 && exit 0; sleep 5; done; exit 1'
+          register: br_ex_ready
+          retries: 5
+          delay: 30
+          until: br_ex_ready.rc == 0
+          changed_when: false
+
+        - name: Check if API VIP is already configured
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'ip addr show br-ex | grep -q {{ api_vip }}'
+          register: api_vip_check
+          changed_when: false
+          failed_when: false
+
+        - name: Add API VIP to master node (workaround for keepalived bootstrap)
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'sudo ip addr add {{ api_vip }}/24 dev br-ex'
+          when: api_vip_check.rc != 0
+          register: add_api_vip
+          changed_when: add_api_vip.rc == 0
+
+        - name: Check if Ingress VIP is already configured
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'ip addr show br-ex | grep -q {{ ingress_vip }}'
+          register: ingress_vip_check
+          changed_when: false
+          failed_when: false
+
+        - name: Add Ingress VIP to master node (workaround for keepalived bootstrap)
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'sudo ip addr add {{ ingress_vip }}/24 dev br-ex'
+          when: ingress_vip_check.rc != 0
+          register: add_ingress_vip
+          changed_when: add_ingress_vip.rc == 0
+
+        # Send gratuitous ARP to announce VIPs on the network
+        - name: Send gratuitous ARP for API VIP
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'sudo arping -A -I br-ex -c 3 {{ api_vip }} || true'
+          when: api_vip_check.rc != 0
+          changed_when: false
+
+        - name: Send gratuitous ARP for Ingress VIP
+          ansible.builtin.shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i {{ ssh_private_key }} core@{{ master_ip }} \
+              'sudo arping -A -I br-ex -c 3 {{ ingress_vip }} || true'
+          when: ingress_vip_check.rc != 0
+          changed_when: false
+
+        - name: Display VIP workaround status
+          ansible.builtin.debug:
+            msg:
+              - "=============================================="
+              - "VIP Workaround Applied"
+              - "=============================================="
+              - "Master IP: {{ master_ip }}"
+              - "API VIP ({{ api_vip }}): {{ 'Already configured' if api_vip_check.rc == 0 else 'Added + ARP announced' }}"
+              - "Ingress VIP ({{ ingress_vip }}): {{ 'Already configured' if ingress_vip_check.rc == 0 else 'Added + ARP announced' }}"
+              - ""
+              - "The bootstrap should now be able to complete."
+              - "=============================================="
+
+    # =========================================================================
+    # WAIT FOR INSTALLATION
+    # =========================================================================
+    - name: Wait for openshift-install to complete
+      ansible.builtin.async_status:
+        jid: "{{ install_async.ansible_job_id }}"
+      register: install_result
+      until: install_result.finished
+      retries: 120
+      delay: 60
+      failed_when: false
+
+    - name: Display installation output
+      ansible.builtin.debug:
+        var: install_result.stdout_lines
+      when: install_result.stdout_lines is defined
+
+    # =========================================================================
+    # POST-INSTALLATION: CLEANUP BOOTSTRAP VM
+    # =========================================================================
+    - name: Check for bootstrap VM and remove if present
+      block:
+        - name: Find bootstrap VM
+          ovirt.ovirt.ovirt_vm_info:
+            auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+            pattern: "name={{ cluster_name }}*bootstrap*"
+          register: bootstrap_vm_info
+
+        - name: Stop and remove bootstrap VM
+          ovirt.ovirt.ovirt_vm:
+            auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+            name: "{{ item.name }}"
+            state: absent
+          loop: "{{ bootstrap_vm_info.ovirt_vms }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when: bootstrap_vm_info.ovirt_vms | length > 0
+          register: bootstrap_removed
+
+        - name: Display bootstrap cleanup status
+          ansible.builtin.debug:
+            msg: "Bootstrap VM {{ 'removed' if bootstrap_removed.changed | default(false) else 'not found or already removed' }}"
+      rescue:
+        - name: Bootstrap cleanup failed (non-fatal)
+          ansible.builtin.debug:
+            msg: "WARNING: Could not clean up bootstrap VM. You may need to remove it manually from oVirt."
+
+    # =========================================================================
+    # VERIFY INSTALLATION
+    # =========================================================================
+    - name: Check installation success
+      ansible.builtin.stat:
+        path: "{{ okd_install_dir }}/auth/kubeconfig"
+      register: kubeconfig
+
+    - name: Verify cluster operators (if kubeconfig exists)
+      when: kubeconfig.stat.exists
+      block:
+        - name: Get cluster operators status
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: ClusterOperator
+            kubeconfig: "{{ okd_install_dir }}/auth/kubeconfig"
+          register: cluster_operators
+          failed_when: false
+
+        - name: Count healthy operators
+          ansible.builtin.set_fact:
+            healthy_operators: >-
+              {{ cluster_operators.resources | default([]) |
+                 selectattr('status.conditions', 'defined') |
+                 selectattr('status.conditions', 'selectattr', 'type', 'equalto', 'Available') |
+                 list | length }}
+            total_operators: "{{ cluster_operators.resources | default([]) | length }}"
+
+        - name: Read kubeadmin password
+          ansible.builtin.slurp:
+            src: "{{ okd_install_dir }}/auth/kubeadmin-password"
+          register: kubeadmin_password
+
+        - name: Display success message
+          ansible.builtin.debug:
+            msg:
+              - "=============================================="
+              - "OKD Installation Complete!"
+              - "=============================================="
+              - ""
+              - "Cluster Operators: {{ healthy_operators }}/{{ total_operators }} available"
+              - ""
+              - "Kubeconfig: {{ okd_install_dir }}/auth/kubeconfig"
+              - "Kubeadmin password: {{ kubeadmin_password.content | b64decode }}"
+              - ""
+              - "Access the cluster:"
+              - "  export KUBECONFIG={{ okd_install_dir }}/auth/kubeconfig"
+              - "  {{ oc_binary }} get nodes"
+              - "  {{ oc_binary }} get clusteroperators"
+              - ""
+              - "Web Console:"
+              - "  https://console-openshift-console.apps.{{ cluster_name }}.{{ base_domain }}"
+              - "=============================================="
+
+    - name: Handle bootstrap timeout (cluster may still be usable)
+      when: not kubeconfig.stat.exists
+      block:
+        - name: Check if API is actually responding
+          ansible.builtin.uri:
+            url: "https://{{ api_vip }}:6443/healthz"
+            validate_certs: false
+            timeout: 10
+          register: api_health
+          failed_when: false
+
+        - name: Display partial success if API is up
+          ansible.builtin.debug:
+            msg:
+              - "=============================================="
+              - "Installation Timed Out - But Cluster May Be OK"
+              - "=============================================="
+              - ""
+              - "The installer timed out, but the API appears to be responding."
+              - "This can happen when the VIP workaround was applied late."
+              - ""
+              - "Check cluster status manually:"
+              - "  export KUBECONFIG={{ okd_install_dir }}/auth/kubeconfig"
+              - "  {{ oc_binary }} get clusterversion"
+              - "  {{ oc_binary }} get clusteroperators"
+              - ""
+              - "If operators are healthy, the cluster is functional."
+              - "=============================================="
+          when: api_health.status is defined and api_health.status == 200
+
+        - name: Fail if installation truly failed
+          ansible.builtin.fail:
+            msg: |
+              Installation failed! Check logs at:
+              {{ okd_install_dir }}/.openshift_install.log
+
+              You can try running the VIP fix manually:
+              ansible-playbook playbooks/04a-fix-vip.yml -e @vars/okd-ipi.yml -e master_ip=<MASTER_IP>
+          when: api_health.status is not defined or api_health.status != 200
+
+    # =========================================================================
+    # CLEANUP: REVOKE OVIRT AUTH
+    # =========================================================================
+    - name: Revoke oVirt SSO token
+      ovirt.ovirt.ovirt_auth:
+        state: absent
+        ovirt_auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+      when: ovirt_auth is defined

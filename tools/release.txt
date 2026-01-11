@@ -1,0 +1,230 @@
+Client tools for OpenShift
+--------------------------
+
+These archives contain the client tooling for [OpenShift](https://docs.openshift.com).
+
+To verify the contents of this directory, use the 'gpg' and 'shasum' tools to
+ensure the archives you have downloaded match those published from this location.
+
+The openshift-install binary has been preconfigured to install the following release:
+
+---
+
+Name:           4.16.0-0.okd-scos-2024-08-21-155613
+Digest:         sha256:2d20d7770f511ca89d92b37812fdab66483d3d8cc2b1e9fcd33a341350e4f827
+Created:        2024-08-21T20:04:49Z
+OS/Arch:        multi (linux/amd64)
+Manifests:      728
+Metadata files: 1
+
+Pull From: quay.io/okd/scos-release@sha256:2d20d7770f511ca89d92b37812fdab66483d3d8cc2b1e9fcd33a341350e4f827
+
+Release Metadata:
+  Version:  4.16.0-0.okd-scos-2024-08-21-155613
+  Upgrades: <none>
+  Metadata:
+
+Component Versions:
+  kubectl          1.29.1               
+  kubernetes       1.29.7               
+  kubernetes-tests 1.29.0               
+  machine-os       418.9.202408211033-0 CentOS Stream CoreOS
+
+Images:
+  NAME                                           PULL SPEC
+  agent-installer-api-server                     quay.io/okd/scos-content@sha256:9277ace8253e579f8652eedb149d665287ae5dde4c3ba129c4ff70774bee4ac6
+  agent-installer-csr-approver                   quay.io/okd/scos-content@sha256:e7b6d1fbfe661c244d9eafe5682cb72a4ed1ea161f2d8c3bd3057deaefc9ceb8
+  agent-installer-node-agent                     quay.io/okd/scos-content@sha256:32818d2c26e3a11dc7acc313f8d277a3d11602675461af627502d32f919f93a1
+  agent-installer-orchestrator                   quay.io/okd/scos-content@sha256:f78e6f0722a5a6a89423046e1abc68bd237551a9d93dfeac0e92e4ea34cb50bb
+  agent-installer-utils                          quay.io/okd/scos-content@sha256:ff61e9b8fa94b64a968cc470e9f45cb1140e058c2357d60574d44747275bfa1e
+  alibaba-cloud-controller-manager               quay.io/okd/scos-content@sha256:72d92c3a16d515914c909c5baa364a3c8a6537a4fc289a5cd8f5c5b50a74cabd
+  alibaba-machine-controllers                    quay.io/okd/scos-content@sha256:525002e4850bf28c8d03352f8b3a4d0e2752eb95e3bb38b588b9e9f28bd8556a
+  apiserver-network-proxy                        quay.io/okd/scos-content@sha256:7da10938515cf3905d91ab5506c094d4e2f6c543eac0f5b299c3ef5c5c6ffc77
+  aws-cloud-controller-manager                   quay.io/okd/scos-content@sha256:7b3d3f4fbe0bff1cc3d62f1dd80c540b61fded0aff7c1441c6e5005a3daf828d
+  aws-cluster-api-controllers                    quay.io/okd/scos-content@sha256:f2dcedaaf32135f1ddc1e46269233b74e99f5f38251f491785ea33ef048d6973
+  aws-ebs-csi-driver                             quay.io/okd/scos-content@sha256:ad600b3fab664d8b5a084fe8fc27d599747cba5cbb90da847d66351b579bfdca
+  aws-ebs-csi-driver-operator                    quay.io/okd/scos-content@sha256:66e0f966f1dbb4eea3c8a123886f83be40bd87b36831b203ab38691e7c1fee69
+  aws-kms-encryption-provider                    quay.io/okd/scos-content@sha256:b4542a5b010a551b747e728594bde9c6553a9e210aeae740a17fcc7797f6ee8e
+  aws-machine-controllers                        quay.io/okd/scos-content@sha256:40bb3c2974511a1316575f0d90e4f4eef0e997b4aa5600c40ed5bb5e9daec562
+  aws-pod-identity-webhook                       quay.io/okd/scos-content@sha256:00a8edb790f388bb290d594ffe8cfc456a81e63d25c6e18a63aae51c771b0c8d
+  azure-cloud-controller-manager                 quay.io/okd/scos-content@sha256:5326554b6a229a4a2325f9d667360f189d614a8133d6ad2bd9788ab5f013725c
+  azure-cloud-node-manager                       quay.io/okd/scos-content@sha256:0e71902c27e7ef965cc05a27ecb9cebae6587ef19526dc3a43b09e23292a5679
+  azure-cluster-api-controllers                  quay.io/okd/scos-content@sha256:c8169eb0425484d193792765a739a515a9fba43579e6c4ca75618489ce602158
+  azure-disk-csi-driver                          quay.io/okd/scos-content@sha256:e0f7209be72dbefaf45525e06c5dd3f0f294de38beeb006224d15d932f779728
+  azure-disk-csi-driver-operator                 quay.io/okd/scos-content@sha256:693a6b1de3853c26cd03b6a6e26a31adbb8e5a602c0ae17639558d92efd2251d
+  azure-file-csi-driver                          quay.io/okd/scos-content@sha256:a7f0d624fdaa1a1f2c1d7ffbf4d3276c1a818a874b901f02739ce9c8a42d8534
+  azure-file-csi-driver-operator                 quay.io/okd/scos-content@sha256:026165c250ebd560b813019eb48b074a98c27a451dec48e50722b79992ad4419
+  azure-kms-encryption-provider                  quay.io/okd/scos-content@sha256:ce800e17709cf93db2dacbbbdd1c570c6a3814b9862d88bb01826390dec665f7
+  azure-machine-controllers                      quay.io/okd/scos-content@sha256:290c018f7cd24a4d7d094d1140fe4cdeefb290ecf68405ef54757e15f7f17e2b
+  azure-workload-identity-webhook                quay.io/okd/scos-content@sha256:d8a59a3274fa20d8d009dbdfc24a9c6f832cc136e6240c3f1887232a991ee26f
+  baremetal-installer                            quay.io/okd/scos-content@sha256:72564da17c772b625a6d046c3e3f061114f8846b13753c018bfa9a82deaba3f3
+  baremetal-machine-controllers                  quay.io/okd/scos-content@sha256:3711b5553ef4aeffe9c4f4631b06ff0c1da50f896d3914cf8c13a28208859c98
+  baremetal-operator                             quay.io/okd/scos-content@sha256:89650bf64e4fecd852497638d2b65416b4d8d458ea7e2b1f8104000c3ac78b53
+  baremetal-runtimecfg                           quay.io/okd/scos-content@sha256:fbc7c9ee0b164fcac6283c313456c45818bb92359a3cb66bc4440de1e7e2d642
+  cli                                            quay.io/okd/scos-content@sha256:4523e65edc91d015a7537015b63bd7ddc5d01ed0f31ee5d25d5c6ab202a6e3e2
+  cli-artifacts                                  quay.io/okd/scos-content@sha256:ae4a59e702bcd5d1767ee0dbad13bd866fa1531a08b9e7577f35af5f6300a1ae
+  cloud-credential-operator                      quay.io/okd/scos-content@sha256:3f6fcb8c84244514fca086736e26ca16c5aa408ec87a501497755bfcf3f0e412
+  cloud-network-config-controller                quay.io/okd/scos-content@sha256:27c8482844c00354625493a0a34818cac6fd75a4fbef63ab57b3fc3542d69063
+  cluster-authentication-operator                quay.io/okd/scos-content@sha256:a1eebb0d704136fd84562153acaa7abb1cb2a3dca20bbf838338d91307d20eec
+  cluster-autoscaler                             quay.io/okd/scos-content@sha256:b8fc37ea4819d5b9d0b2b08359f4d361cf94367cb1355b29019e406dd1c26da7
+  cluster-autoscaler-operator                    quay.io/okd/scos-content@sha256:3ba975b98bf359c39f71282680466b7e5b44d15dce452670f162aa0a00fa8ae7
+  cluster-baremetal-operator                     quay.io/okd/scos-content@sha256:fc73f51b1735420a809cdde497e2c1739aa350d222fac87ced1cf69c0b05f555
+  cluster-bootstrap                              quay.io/okd/scos-content@sha256:3079a2dfbec9a5ad7b2b7db8bdfeba666492a8ed046cd8bd8087666d1f6fc64b
+  cluster-capi-controllers                       quay.io/okd/scos-content@sha256:8f16834b89152ef6be0a985161da7444440f223ca451fa410fdab95e2d63e28a
+  cluster-capi-operator                          quay.io/okd/scos-content@sha256:f20abb3b6903eb8dda89cdad22509cccc3b79448a80ec384f08688d3f9ce474c
+  cluster-cloud-controller-manager-operator      quay.io/okd/scos-content@sha256:47266b7af6afee3b837100cf44cc74b1331a13192d36c0687055964a3c1835b6
+  cluster-config-api                             quay.io/okd/scos-content@sha256:a8d1e3e889793669fa0a6ba60711f114b11f68c915f80bef52055194c8014f40
+  cluster-config-operator                        quay.io/okd/scos-content@sha256:b71a7307ff6b47cec1fb7ac41afecb9555503c627910ca0e25234e2a910ef187
+  cluster-control-plane-machine-set-operator     quay.io/okd/scos-content@sha256:ec9b53f19c4a00de36ad8fb88cb4916328f90d093f04120fc17fae376355e9b2
+  cluster-csi-snapshot-controller-operator       quay.io/okd/scos-content@sha256:aa3a76dd5c2df59a77e79adbd388a555cdd5ed14feb7b066283c17de1a69b14e
+  cluster-dns-operator                           quay.io/okd/scos-content@sha256:52f1014edf5b6013f854e41f7762e05d56d3c20646f0551a061004716ddf72c2
+  cluster-etcd-operator                          quay.io/okd/scos-content@sha256:5fac80f26ecc145f01bee1683d6e4730c504f9b24b64724897a2c4cec25ac985
+  cluster-image-registry-operator                quay.io/okd/scos-content@sha256:c130645ddb50b0985fa200837e0bd1d241e8f6ebb296cf006b885c4a9482ebbc
+  cluster-ingress-operator                       quay.io/okd/scos-content@sha256:734739173b4b4fa3ae2a5c926955bb80b33360c44ede2d92097fe2528a484003
+  cluster-kube-apiserver-operator                quay.io/okd/scos-content@sha256:37d6b6c13d864deb7ea925acf2b2cb34305333f92ce64e7906d3f973a8071642
+  cluster-kube-cluster-api-operator              quay.io/okd/scos-content@sha256:dd8b05c03a8efcb2d61b44244d1842e5c999c654666eefb304aa782f5bcb5afb
+  cluster-kube-controller-manager-operator       quay.io/okd/scos-content@sha256:91812a609f8d31cea86fe105328a2cf5fbd081afa1be6bbf244f97603bac826a
+  cluster-kube-scheduler-operator                quay.io/okd/scos-content@sha256:422b97ebfa2a16d002955cc5fcad74773509bd7c6c21fa7e97b408ea9132255d
+  cluster-kube-storage-version-migrator-operator quay.io/okd/scos-content@sha256:45bf07faad790a3a3f7516bce2f14885a5704d21f6852b3d5aacd46313c76d77
+  cluster-machine-approver                       quay.io/okd/scos-content@sha256:9b43b377093e11160ef465c5f427476f7fdde4776615f513edf6d06d53639a36
+  cluster-monitoring-operator                    quay.io/okd/scos-content@sha256:7e389ac216825c93e08006ef5a522d67e6dc3429d84289929a93583c844cb048
+  cluster-network-operator                       quay.io/okd/scos-content@sha256:d572c7c576e4bf9ab77049f7dcb22026a9ff438f39c6de457bae0baa230df07d
+  cluster-node-tuning-operator                   quay.io/okd/scos-content@sha256:a246182095b3664ccb69219a8d677fff6ce07f1f4f63980f391d5121924f537c
+  cluster-olm-operator                           quay.io/okd/scos-content@sha256:8aa19c3e80266cfeca0975a9896540852046a327f78c7e1e11a7e5a94a96daa6
+  cluster-openshift-apiserver-operator           quay.io/okd/scos-content@sha256:dbc8390cf6a124b80371af20c14d35a0c10712166085d29a5399b90d40804e19
+  cluster-openshift-controller-manager-operator  quay.io/okd/scos-content@sha256:b180162b1467fe8f1c23ea751e02a1ec0581acc8c3211d72ef7feda4a1ee3d87
+  cluster-policy-controller                      quay.io/okd/scos-content@sha256:5fda5fb5493457b946403f9fa5648be3d909d5c0e93bceffa913aa95153fffda
+  cluster-samples-operator                       quay.io/okd/scos-content@sha256:261f2286140b2e9592594789fe91d3155b32f3ee4321e5cf4e5b3ecb1a0a9bd0
+  cluster-storage-operator                       quay.io/okd/scos-content@sha256:b6874a2840d8932a105b97151e038274d0ab782ebd3d21cc2fc5a2bb5d6a54f0
+  cluster-update-keys                            quay.io/okd/scos-content@sha256:529e8c2630b9a74726cd65979786c683df7c5f35e809cbefeb3a479d373892a4
+  cluster-version-operator                       quay.io/okd/scos-content@sha256:fcef1dde79abe4eea113a354fe33abca352be75a9fc1cb13e5ed3c77dd636f83
+  configmap-reloader                             quay.io/okd/scos-content@sha256:29857c41389b41d17675a83a0b676efddd91265580ee44a75ffe8ef30e4ddc98
+  console                                        quay.io/okd/scos-content@sha256:f38efd584cc7fa98ad44a1ac8c3fa11c2672b82686ee018ca24725a0e0602ea0
+  console-operator                               quay.io/okd/scos-content@sha256:6ec70465f99f860aed2f892e53514060afc85a1b88bf7ba4d979d0e7c44baff8
+  container-networking-plugins                   quay.io/okd/scos-content@sha256:ecd2a8a721e90b11555b59c449813df8d4f968954d82abd998dac73f60ebf1ca
+  containernetworking-plugins-microshift         quay.io/okd/scos-content@sha256:ab6efaeeb53aa339907adfa833ae77ba2f1ad59398003a04a23448ff9d048521
+  coredns                                        quay.io/okd/scos-content@sha256:e9e484e1b14b537de2e19f3c977ac8a060fd950c69365bb65028b011223a205b
+  csi-driver-manila                              quay.io/okd/scos-content@sha256:0981bf7cbfa7f89e62f005d7179450c38d846ef729d5cb26ddf92ff53cd6c0ff
+  csi-driver-manila-operator                     quay.io/okd/scos-content@sha256:d9435855ff354b53933155a1da9f9181982c2c2e3ac6322db83cdbcc04316298
+  csi-driver-nfs                                 quay.io/okd/scos-content@sha256:80b7b71d3d2649e224fd78a4ee300f9579cc9ef2967921fbdc130d68c97c1162
+  csi-driver-shared-resource                     quay.io/okd/scos-content@sha256:491cf7c70556447b6eaa5f2ce316f5520c049ee03c4ca389567c8e6e552ede1f
+  csi-driver-shared-resource-operator            quay.io/okd/scos-content@sha256:aab0ae120429cc96d3ca1dfc2c2244cf911d9e999d28789d44ffad0413a23426
+  csi-driver-shared-resource-webhook             quay.io/okd/scos-content@sha256:b6f0d0d629b048d649cb590c23d4ef394ae517e5bedb3d04dd1d386de1619c69
+  csi-external-attacher                          quay.io/okd/scos-content@sha256:fc02928e285fe1f0f4a3d31a64f634d7b4b068f88c6f733ca537294b5f495046
+  csi-external-provisioner                       quay.io/okd/scos-content@sha256:e59aa208229b0124474b3f8a0b1da67826d81845eb22daa7392115c8177cbb42
+  csi-external-resizer                           quay.io/okd/scos-content@sha256:9d71e8617f644433fab0a3944cb5488c01314ef7e8d0bc979e6dcd6a8dbb4a83
+  csi-external-snapshotter                       quay.io/okd/scos-content@sha256:81717d6d9cd7a46151c83faf6a22f331b1a3ed94b6d2349aff6081732768fb6f
+  csi-livenessprobe                              quay.io/okd/scos-content@sha256:89349ee3a7a7c87ec7d3ea93e42235e3193724891217552a51a11099c3758d24
+  csi-node-driver-registrar                      quay.io/okd/scos-content@sha256:a77f75405ca2f7a3c9541c94856ea7530bbba56ffb7c51c0dc27f59b3b43ac96
+  csi-snapshot-controller                        quay.io/okd/scos-content@sha256:6f921b1e5908f6c69068c82add27d4b91014b7774ae2c247d3adaaef6daf1d08
+  csi-snapshot-validation-webhook                quay.io/okd/scos-content@sha256:2c6c725ab73f6f83f4519d912b6f346f39445f2b28b99109455c1ab106ca916a
+  deployer                                       quay.io/okd/scos-content@sha256:9d9ffbe3ad5440961c1fe9a12acfea8ff5e08b3c59d28cbf8182b9b0f4f1811b
+  docker-builder                                 quay.io/okd/scos-content@sha256:17d6de76c873b415b887670f15fe2e57d3f0080318ba22202ee3eaddb0f51673
+  docker-registry                                quay.io/okd/scos-content@sha256:5f3ebe022a0a64ca033feff7740be607dd2f692d20b373bb160be7111deba2e1
+  driver-toolkit                                 quay.io/okd/scos-content@sha256:7a4c072a67c5ea3b805122bd69b803b7f16d4ab2888a57121ef677bba0aaa94f
+  egress-router-cni                              quay.io/okd/scos-content@sha256:96788633dc30f678bab2528c65847f13ea4325de9a681d6d5b3a3a789048c024
+  etcd                                           quay.io/okd/scos-content@sha256:89f17c52e56f16fe5ca37c24ad5e5b4b3cb0a069889f04bebbd0e1d2e6d7f67f
+  gcp-cloud-controller-manager                   quay.io/okd/scos-content@sha256:2b2840ca4e18fbffa3b455a6329ab8557b50cd73ba595696ffd0781272f60abc
+  gcp-cluster-api-controllers                    quay.io/okd/scos-content@sha256:fc20a1c94f7bc265c2262953572a1cc88e1ff120f4329c0379e532c57052c8b5
+  gcp-machine-controllers                        quay.io/okd/scos-content@sha256:adc3d6fc2d60a114b544c7ebe8a251140ca515148465d247a7b10fbd0ba698d4
+  gcp-pd-csi-driver                              quay.io/okd/scos-content@sha256:8ae07b7b248c97be54698f530cff2cd7443cd87d2e45708e70e9b42a85ec76ed
+  gcp-pd-csi-driver-operator                     quay.io/okd/scos-content@sha256:febe4ca6d611c59f1019157f95b7f27e6843a7d3220ca3089353eae65c6aef1e
+  haproxy-router                                 quay.io/okd/scos-content@sha256:b4f82d2bfa5159e4ee4ddb247c0197499116d8945cb612396ff932bfa9df3bbb
+  hyperkube                                      quay.io/okd/scos-content@sha256:db7fcff06af8da4cd273cb094456885627234f928c402b4e6e7fb1ef90f9ccf0
+  hypershift                                     quay.io/okd/scos-content@sha256:218508b778b1fd29a64fbfc21bf4a4134eb9d2cbb8f709398a33c3ab6844074c
+  ibm-cloud-controller-manager                   quay.io/okd/scos-content@sha256:abaa285e2e320644d9d4830c70f54ee04800ff4e40ba4b88c274022bc393c5b1
+  ibm-vpc-block-csi-driver                       quay.io/okd/scos-content@sha256:1392224660ccf76e183dcdd92788b8ee9b307292d901f7fc7ed76d0c224ca6fe
+  ibm-vpc-block-csi-driver-operator              quay.io/okd/scos-content@sha256:d4ffb90cc9b085385e98ce5b34dd4b0e16983b0ae40b2340971727b0f765710b
+  ibmcloud-cluster-api-controllers               quay.io/okd/scos-content@sha256:6f68c06568bd0e4a78de174dc321899ea53a4b0f62ef83fb0d3f4287259ea1ea
+  ibmcloud-machine-controllers                   quay.io/okd/scos-content@sha256:a95b79c2711cd54bd31a1b7cdb0cb8434e0b982d1c36453d7ccc8181fc38c41a
+  insights-operator                              quay.io/okd/scos-content@sha256:f5e549f6ae31611541e4a07cca410352e43d2d908d40e19601cc5639b524fda8
+  installer                                      quay.io/okd/scos-content@sha256:d07bb020e59bc6661e58257f1199864defca1b64df89c95b4faa060df899ef69
+  installer-altinfra                             quay.io/okd/scos-content@sha256:d095a8c04b093613bc010baa538a54cd4490534e3e1d5b459737df5eec9fc5f7
+  installer-artifacts                            quay.io/okd/scos-content@sha256:2e661e62acf554df621c084924aa983c0c4b2635b3e420980960ec4822e1a89c
+  installer-etcd-artifacts                       quay.io/okd/scos-content@sha256:e4ede9e3c77e39ec43bb9e9c1b9204f848c29b23b25c0bb8ea036144e1a6a1af
+  installer-kube-apiserver-artifacts             quay.io/okd/scos-content@sha256:6136c5cb2253c692831f2a6554603b7c731583af98c9d4d5884f30fc7498afea
+  ironic                                         quay.io/okd/scos-content@sha256:654a24b31d2501aa04ac9e36e0b7aa4afa4c22059a5caf855135d09170c67809
+  ironic-agent                                   quay.io/okd/scos-content@sha256:8cffd637e0d28139fb01000058f4b833a9ec43b3670c0c36941e5c5f49d575c5
+  ironic-machine-os-downloader                   quay.io/okd/scos-content@sha256:1a6b555de32a3f5da3b94996b612ef5364b92d7146ff810c5d4e63818db01311
+  ironic-static-ip-manager                       quay.io/okd/scos-content@sha256:567ed0f82bea4607507eaaf5f5b1b315b86fdc36cc35e5707fe27ef19d496691
+  k8s-prometheus-adapter                         quay.io/okd/scos-content@sha256:256fae2d9761bfafb80ac4138579f26403cac816d42c7c9b534a5cd49beb4eda
+  keepalived-ipfailover                          quay.io/okd/scos-content@sha256:971b4e3f7cfde60d91692b431b3d6d7c2121558e495d7b0496538e3d48be6805
+  kube-metrics-server                            quay.io/okd/scos-content@sha256:14f74c03bdf1408dcd464cbe61063ad2762cb54309d28ea87d3d7c0f73211df1
+  kube-proxy                                     quay.io/okd/scos-content@sha256:e62ac4b18632dde86a79b880672e5fdbd965b8913b3fba6537bd3c77c347f010
+  kube-rbac-proxy                                quay.io/okd/scos-content@sha256:9472c4f20f5b5366ec1c41f34c12bf61804fa66d8cc28e81f72e7316f566f58c
+  kube-state-metrics                             quay.io/okd/scos-content@sha256:f9478431b14353327e1e24df6ccb921c270eb517447c1f9c7599d81fadaaaab6
+  kube-storage-version-migrator                  quay.io/okd/scos-content@sha256:cb62544dec4a480e3b0e6e7a8864938068ab4a62d324abeed7bb79e9250516df
+  kubevirt-cloud-controller-manager              quay.io/okd/scos-content@sha256:187d5dab3010b0258685d9e4a583d31768b6f26e5e1fcdad82458e326fb04c14
+  kubevirt-csi-driver                            quay.io/okd/scos-content@sha256:921c9f296646e760cee4a9e738f65db6e59c880fa192195c8c8bcc3e03bb26b9
+  libvirt-machine-controllers                    quay.io/okd/scos-content@sha256:f057de616bad21fd86ffae3dee612a7b760b25c68315468e777ae9b790a3abf7
+  machine-api-operator                           quay.io/okd/scos-content@sha256:403a78ede1bae962ce233f907c33ca2453eb94bd6da775771e7b01ee9e4d7252
+  machine-config-operator                        quay.io/okd/scos-content@sha256:cb68498aceefa81f105c4ce6c74787c3e1281d141725b0e20df555aa549dc5aa
+  machine-image-customization-controller         quay.io/okd/scos-content@sha256:d44f07c10bf2e50b344f159531105ae551d5d286b8ffed4c378a9f58f91a0ec1
+  machine-os-images                              quay.io/okd/scos-content@sha256:9455aa5f2562b38e945654b0c4ca32f64d017482ad898fa8ebcb2e4e484d8080
+  monitoring-plugin                              quay.io/okd/scos-content@sha256:c042620d08e92b0a0172b8bcdb41f395b2bfcec00d63f5b9c1f248c2d761ce61
+  multus-admission-controller                    quay.io/okd/scos-content@sha256:1f0621596c24cf361cc71540a4a70b8f71075db0c07d669442ba9ee18fcaac5d
+  multus-cni                                     quay.io/okd/scos-content@sha256:64f6e6050e6cd8a64782fa29671c5cf115723944cbfbd9d9c3c2c65d4cef8c71
+  multus-cni-microshift                          quay.io/okd/scos-content@sha256:3f8e22a39dc76a7b09749dc0e434a1c6a9ff64b0dcdceb58c54d7fb0cc44f97a
+  multus-networkpolicy                           quay.io/okd/scos-content@sha256:4737cb879a2a6673da5a7f7a6012a718cc5f6a8c0023154639e288e9b6e7a88a
+  multus-route-override-cni                      quay.io/okd/scos-content@sha256:a9a4089f66e95f8e7e0b990ebaa13f9bf75b207f8b2180d4f9f6d31c945626c7
+  multus-whereabouts-ipam-cni                    quay.io/okd/scos-content@sha256:2210bb7292a698a63ca92c294cc458d7ee6e6d3cdeb5f26ab2ff3efd467b43a8
+  must-gather                                    quay.io/okd/scos-content@sha256:37ac233de0bfaf72c047850243eefdb0409ec6ab1878653ffbd7abfde04f2cc4
+  network-interface-bond-cni                     quay.io/okd/scos-content@sha256:e2931353503c93482e7d30d28298a050b5d14873a75e5240091d294828164716
+  network-metrics-daemon                         quay.io/okd/scos-content@sha256:e7dcc2b50c2681d8b1b8d0a61c5223e01229d9da36ae44115a34ccda0a3d6681
+  network-tools                                  quay.io/okd/scos-content@sha256:6214b04768c70504d2452b51c94133e4ca2f102971adcd034137cb64a451eade
+  nutanix-cloud-controller-manager               quay.io/okd/scos-content@sha256:37f7463ae30dfb29228f4f5726437c5183755e2c140811714c9c5d9f750e481f
+  nutanix-machine-controllers                    quay.io/okd/scos-content@sha256:9261a99d11247c73f2213111f20d316d6160aceec6b1781aa46777a122201db1
+  oauth-apiserver                                quay.io/okd/scos-content@sha256:08b3977cc10945946d88ac19e53ad2c65d864d0124437ae14f84a22a17867400
+  oauth-proxy                                    quay.io/okd/scos-content@sha256:3427d619abbc4a3075b4a60d42f6639e93ec30397f8563f3c88a098012a0f444
+  oauth-server                                   quay.io/okd/scos-content@sha256:550df63edc29304f3d3cdd01e0e910af9f39965a64b0e96740e9d87e6d73fbcb
+  oc-mirror                                      quay.io/okd/scos-content@sha256:18447aa6c6a8d126f4ef7730cb0ebc8c47174d3612fac99cd8de8277b94708ed
+  olm-catalogd                                   quay.io/okd/scos-content@sha256:dbdc412fc2459d15753533b3be24c694382cf335d17084c5ffac2f465e50db16
+  olm-operator-controller                        quay.io/okd/scos-content@sha256:0b21cc77ef30095226fea799c2ec35b11dfdd1e0a75de2232c6b0053261cc598
+  olm-rukpak                                     quay.io/okd/scos-content@sha256:95f6217be4f1d52147b2d805a14558cc126e8341a1930903da0c5cd9110dabc7
+  openshift-apiserver                            quay.io/okd/scos-content@sha256:412e08e50f02b638939cd99fe7f7a28940bb8747acc5a03846778c395ab4229f
+  openshift-controller-manager                   quay.io/okd/scos-content@sha256:4663133b1d1a44576854bd72783e301edbeaa572a65ac0fcd43e986009af8417
+  openshift-state-metrics                        quay.io/okd/scos-content@sha256:e33df9d569f7969b0463cef5b66e289c595241893d4103a23c828033a56bc823
+  openstack-cinder-csi-driver                    quay.io/okd/scos-content@sha256:87c7ea4e13015f3f4301c2a27997779e3d74acc231857793c38e12c55abb74b1
+  openstack-cinder-csi-driver-operator           quay.io/okd/scos-content@sha256:e97b55343c541c6d57a796ff75079227c0331fc951e3d84d09b35147f7cbdb3d
+  openstack-cloud-controller-manager             quay.io/okd/scos-content@sha256:a6ec6aecc99c93952f40b4f68dcb3e29c3ffd519215d80a5a980bb87217bfc03
+  openstack-cluster-api-controllers              quay.io/okd/scos-content@sha256:e8ff263c78de6664c1fa5fc6556d85ddfbfbf8a956ebdaa41c081439e0e68fb3
+  openstack-machine-api-provider                 quay.io/okd/scos-content@sha256:b60b6a4a8b11cd131f79cb2089692423a6f818c5c6b51e4a849ecc2860825675
+  operator-lifecycle-manager                     quay.io/okd/scos-content@sha256:e31084424b1e3b645394af0d08dc3c84e4f311053547a94ba704e4a0f4245c01
+  operator-marketplace                           quay.io/okd/scos-content@sha256:e83c4b0c63aef85d0279cf67b05052d524b5e7df0e98c2118b34c81ef826be1f
+  operator-registry                              quay.io/okd/scos-content@sha256:94744c34ea2b5ae65098e7852868a2087c2eb773fdba41ace2343f17d563efca
+  ovirt-csi-driver                               quay.io/okd/scos-content@sha256:903555d94e3039ff5d1396d586f0c118f33b2a0934d15300e4bad7676ae4ff06
+  ovirt-csi-driver-operator                      quay.io/okd/scos-content@sha256:a045aa61bc871dc60c62da4ef49771ac275a8fa2fc009fe9ed480c602811dd7c
+  ovirt-machine-controllers                      quay.io/okd/scos-content@sha256:9a8ebd90bf109f4a477e87d1f4e237135da210b44978e18e88c8e37eed4b885d
+  ovn-kubernetes                                 quay.io/okd/scos-content@sha256:19ad610fc3fe20a8add84893d56cef742f87be02609031aa6208e510aed69a4d
+  ovn-kubernetes-microshift                      quay.io/okd/scos-content@sha256:a4646dfcf17dbb39fdc5ae92db70fe005caa4c742d8d71b5a7556e3820f72a1c
+  pod                                            quay.io/okd/scos-content@sha256:dd91bec81fc0d401cda75a53b0d9045a9f04404b5fb46d7b09acd7da06c50eef
+  powervs-block-csi-driver                       quay.io/okd/scos-content@sha256:f74e717532fc6391bd8b7749f64c9e5e03ed8ff1c115a46c7608bf3c9c3772c8
+  powervs-block-csi-driver-operator              quay.io/okd/scos-content@sha256:569ff5667dc1777367e03f2b955e083bb5e006fa1dd30521f2f5b76ecd0c1fa1
+  powervs-cloud-controller-manager               quay.io/okd/scos-content@sha256:88e94f42ea52f94a84e4c70a128b76a92935a493f993897b4f6e8c83afd5b4d9
+  powervs-machine-controllers                    quay.io/okd/scos-content@sha256:348aab3919124e939ef5f5b8bc3419131723a774b8707bf17eee1c8abdee2f91
+  prom-label-proxy                               quay.io/okd/scos-content@sha256:b64c4ef58e50ec642447b49b694162931f3ea0e908f4d64926fc11b84a64e124
+  prometheus                                     quay.io/okd/scos-content@sha256:fa3c9a9b96e806cf63e502b4ad692da9db16f3254fc51866ae09bde70bf03d7e
+  prometheus-alertmanager                        quay.io/okd/scos-content@sha256:4a076aa6520fa6e3ee224626950a6c5a894e7505f83b760f55df611c7544d1ee
+  prometheus-config-reloader                     quay.io/okd/scos-content@sha256:0468218b4f9ce18975bf9b33d604b4a3e91d61c4404bc955df136bf4707f2da8
+  prometheus-node-exporter                       quay.io/okd/scos-content@sha256:080958b89369029abbad5391bb4107ad87f99454e3fffb05c0a88f5d8eca56a3
+  prometheus-operator                            quay.io/okd/scos-content@sha256:f714197b2a3dbe19ed1dc981f2f253fc07c3086d010d6e11ac4f2cf91246c20c
+  prometheus-operator-admission-webhook          quay.io/okd/scos-content@sha256:9931a0a8f2ceed7c5802764a32a137e78a1838047c6b8ad0bbe8245bfc50d0e4
+  route-controller-manager                       quay.io/okd/scos-content@sha256:438a4d790af625b68b4741c8b42f6f29ed4f8c780540bdbbd9c1ca1c787cb874
+  sdn                                            quay.io/okd/scos-content@sha256:62d83bd9a7c90c383add2a0a4f6e26b08c8c23f4ab2674cc806823d00958f411
+  service-ca-operator                            quay.io/okd/scos-content@sha256:2fcff36b9b0b05bfa355f3a1674807c0723fe22c3bcb7808d541bba2d5b1ae9c
+  stream-coreos                                  quay.io/okd/scos-content@sha256:3f4ca57e8ec68fb5a8ba5e2461c69162e211adba667dac299baf58ccf7923dad
+  stream-coreos-extensions                       quay.io/okd/scos-content@sha256:5e26778e6a6ddb803efbdf554b14f4eac8953df861860f4f655c75b726c541ff
+  telemeter                                      quay.io/okd/scos-content@sha256:7340f966539ae428273c97fb9b2e856d3e5350fdd5ea5efa5bb3c6f1f2f96ffa
+  tests                                          quay.io/okd/scos-content@sha256:27a9b9c805b528f8add654d519293e6737cddbfc5a0544b0c1e092db7c42f2ca
+  thanos                                         quay.io/okd/scos-content@sha256:c184bb5db220fbda442bacd4ffb9901ed9dd5313279064c82e210b3e68d7d998
+  tools                                          quay.io/okd/scos-content@sha256:5a4237ccbdcc1735aaad0030d0226ff58518223a7cd4a6aee4c6820555640985
+  vsphere-cloud-controller-manager               quay.io/okd/scos-content@sha256:d64291fe1c7a1dd154b5d93f338a56b64b2d5681138805f81f8efb6311d254db
+  vsphere-cluster-api-controllers                quay.io/okd/scos-content@sha256:071fb871fff71153ce95467c780ab1f4d7b7e301381019b7af7f0dba94ba190c
+  vsphere-csi-driver                             quay.io/okd/scos-content@sha256:ec5ff322d45fe681f3ccf2b70995420909ea25938e2319c3288bde75d89e9bd7
+  vsphere-csi-driver-operator                    quay.io/okd/scos-content@sha256:3874e4b61db5543097be349b0971d3cf70e9500c5921e40d4f76e768a35eaef1
+  vsphere-csi-driver-syncer                      quay.io/okd/scos-content@sha256:82147932a909c6f8765572d56cf09d9603c833e7e22efb96a3c759e050526c10
+  vsphere-problem-detector                       quay.io/okd/scos-content@sha256:64d1b595541d68824f2b901341c73779b09d73b74ade0845057dab3ac037ed15
+
+Warnings:
+* multiple versions or display names reported for the following component(s): kubectl
+

@@ -1,0 +1,6 @@
+---
+# pfSense SSH connection settings
+# Disable ControlMaster as pfSense's SSH doesn't handle it well
+# Use password auth only to avoid "Too many authentication failures"
+ansible_ssh_common_args: "-o ControlMaster=no -o ControlPersist=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+ansible_ssh_pipelining: false

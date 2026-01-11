@@ -1,0 +1,322 @@
+---
+# 01-prerequisites.yml - Validate environment for OKD Agent-based installation
+#
+# This playbook:
+#   1. Validates oVirt resources (cluster, storage, network)
+#   2. Checks pfSense HAProxy availability
+#   3. Validates DNS configuration
+#   4. Checks openshift-install binary
+#
+# Usage:
+#   ansible-playbook playbooks/01-prerequisites.yml -e @vars/okd-agent.yml
+
+- name: Validate Prerequisites for OKD Agent-based Installation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Display prerequisite check
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD Agent-based Installation Prerequisites"
+          - "=============================================="
+          - "oVirt Engine: {{ ovirt_engine_fqdn }}"
+          - "Cluster: {{ ovirt_cluster_name }}"
+          - "Storage: {{ ovirt_storage_domain_name }}"
+          - "Network: {{ ovirt_network_name }}"
+          - "pfSense: {{ pfsense_host }}"
+          - "=============================================="
+
+    # ==================== DOWNLOAD OKD TOOLS ====================
+    - name: Create tools directory
+      ansible.builtin.file:
+        path: "{{ okd_tools_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check if openshift-install exists
+      ansible.builtin.stat:
+        path: "{{ openshift_install_binary }}"
+      register: installer_stat
+
+    - name: Check if oc exists
+      ansible.builtin.stat:
+        path: "{{ oc_binary }}"
+      register: oc_stat
+
+    - name: Download and extract openshift-client
+      when: not oc_stat.stat.exists
+      block:
+        - name: Download openshift-client tarball
+          ansible.builtin.get_url:
+            url: "https://github.com/okd-project/okd-scos/releases/download/{{ okd_version }}/openshift-client-linux-{{ okd_version }}.tar.gz"
+            dest: "{{ okd_tools_dir }}/openshift-client.tar.gz"
+            mode: '0644'
+
+        - name: Extract openshift-client
+          ansible.builtin.unarchive:
+            src: "{{ okd_tools_dir }}/openshift-client.tar.gz"
+            dest: "{{ okd_tools_dir }}"
+            remote_src: true
+
+        - name: Remove openshift-client tarball
+          ansible.builtin.file:
+            path: "{{ okd_tools_dir }}/openshift-client.tar.gz"
+            state: absent
+
+    - name: Download and extract openshift-install
+      when: not installer_stat.stat.exists
+      block:
+        - name: Download openshift-install tarball
+          ansible.builtin.get_url:
+            url: "https://github.com/okd-project/okd-scos/releases/download/{{ okd_version }}/openshift-install-linux-{{ okd_version }}.tar.gz"
+            dest: "{{ okd_tools_dir }}/openshift-install.tar.gz"
+            mode: '0644'
+
+        - name: Extract openshift-install
+          ansible.builtin.unarchive:
+            src: "{{ okd_tools_dir }}/openshift-install.tar.gz"
+            dest: "{{ okd_tools_dir }}"
+            remote_src: true
+
+        - name: Remove openshift-install tarball
+          ansible.builtin.file:
+            path: "{{ okd_tools_dir }}/openshift-install.tar.gz"
+            state: absent
+
+    # ==================== VERIFY OPENSHIFT-INSTALL ====================
+    - name: Verify openshift-install binary exists
+      ansible.builtin.stat:
+        path: "{{ openshift_install_binary }}"
+      register: installer_stat
+
+    - name: Fail if openshift-install not found
+      ansible.builtin.fail:
+        msg: "openshift-install not found at {{ openshift_install_binary }}. Download failed."
+      when: not installer_stat.stat.exists
+
+    - name: Get openshift-install version
+      ansible.builtin.command:
+        cmd: "{{ openshift_install_binary }} version"
+      register: installer_version
+      changed_when: false
+
+    - name: Display installer version
+      ansible.builtin.debug:
+        msg: "{{ installer_version.stdout_lines[0] | default('(check mode - skipped)') }}"
+      when: installer_version.stdout_lines | default([]) | length > 0
+
+    # ==================== CHECK PFSENSE HAPROXY ====================
+    - name: Check pfSense connectivity
+      ansible.builtin.wait_for:
+        host: "{{ pfsense_host }}"
+        port: 22
+        timeout: 10
+      register: pfsense_check
+      failed_when: false
+
+    - name: Warn if pfSense not reachable
+      ansible.builtin.debug:
+        msg: "WARNING: pfSense at {{ pfsense_host }} not reachable via SSH"
+      when: pfsense_check is failed
+
+    - name: Check HAProxy package on pfSense
+      ansible.builtin.shell: |
+        sshpass -p '{{ pfsense_password }}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+          {{ pfsense_user }}@{{ pfsense_host }} \
+          "pkg info haproxy 2>/dev/null && echo 'INSTALLED' || echo 'NOT_INSTALLED'"
+      register: haproxy_check
+      changed_when: false
+      failed_when: false
+      when: pfsense_check is success
+
+    - name: Warn if HAProxy not installed
+      ansible.builtin.debug:
+        msg: |
+          WARNING: HAProxy not installed on pfSense!
+          Install via: System > Package Manager > Available Packages > haproxy
+          Or run: ansible-playbook playbooks/00-setup-pfsense.yml -e @vars/okd-agent.yml
+      when: pfsense_check is success and "'NOT_INSTALLED' in haproxy_check.stdout"
+
+    # ==================== CHECK DNS SERVER ====================
+    - name: Check DNS server connectivity
+      ansible.builtin.wait_for:
+        host: "{{ dns_server }}"
+        port: 53
+        timeout: 10
+      register: dns_server_check
+      failed_when: false
+
+    - name: Warn if DNS server not reachable
+      ansible.builtin.debug:
+        msg: |
+          WARNING: DNS server at {{ dns_server }} not reachable!
+          Ensure CoreDNS is deployed on Kubernetes cluster.
+          Run: cd /root/learning/cluster/coredns && ansible-playbook -i inventory.ini deploy-coredns.yml
+      when: dns_server_check is failed
+
+    - name: Verify API DNS record exists
+      ansible.builtin.command:
+        cmd: "dig @{{ dns_server }} api.{{ cluster_name }}.{{ base_domain }} +short +timeout=5"
+      register: api_dns_check
+      changed_when: false
+      failed_when: false
+      when: dns_server_check is success
+
+    - name: Warn if API DNS record missing
+      ansible.builtin.debug:
+        msg: |
+          WARNING: API DNS record not found!
+          api.{{ cluster_name }}.{{ base_domain }} should resolve to {{ api_vip }}
+          Run: ansible-playbook playbooks/02-setup-dns.yml -e @vars/okd-agent.yml
+      when: dns_server_check is success and (api_dns_check.stdout | default('')) == ''
+
+    - name: Verify Ingress wildcard DNS record
+      ansible.builtin.command:
+        cmd: "dig @{{ dns_server }} test.apps.{{ cluster_name }}.{{ base_domain }} +short +timeout=5"
+      register: apps_dns_check
+      changed_when: false
+      failed_when: false
+      when: dns_server_check is success
+
+    - name: Warn if Ingress DNS record missing
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Ingress wildcard DNS record not found!
+          *.apps.{{ cluster_name }}.{{ base_domain }} should resolve to {{ ingress_vip }}
+          Run: ansible-playbook playbooks/02-setup-dns.yml -e @vars/okd-agent.yml
+      when: dns_server_check is success and (apps_dns_check.stdout | default('')) == ''
+
+    # ==================== AUTHENTICATE TO OVIRT ====================
+    - name: Obtain SSO token from oVirt Engine
+      ovirt.ovirt.ovirt_auth:
+        url: "{{ ovirt_engine_url }}"
+        username: "{{ ovirt_engine_user }}"
+        password: "{{ ovirt_engine_password }}"
+        insecure: "{{ ovirt_engine_insecure }}"
+      register: ovirt_auth
+
+    # ==================== FETCH CLUSTER ID ====================
+    - name: Get oVirt cluster info
+      ovirt.ovirt.ovirt_cluster_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ ovirt_cluster_name }}"
+      register: cluster_info
+
+    - name: Fail if cluster not found
+      ansible.builtin.fail:
+        msg: "Cluster '{{ ovirt_cluster_name }}' not found in oVirt"
+      when: cluster_info.ovirt_clusters | length == 0
+
+    - name: Set cluster ID
+      ansible.builtin.set_fact:
+        fetched_cluster_id: "{{ cluster_info.ovirt_clusters[0].id }}"
+
+    # ==================== FETCH STORAGE DOMAIN ID ====================
+    - name: Get oVirt storage domain info
+      ovirt.ovirt.ovirt_storage_domain_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ ovirt_storage_domain_name }}"
+      register: storage_info
+
+    - name: Fail if storage domain not found
+      ansible.builtin.fail:
+        msg: "Storage domain '{{ ovirt_storage_domain_name }}' not found in oVirt"
+      when: storage_info.ovirt_storage_domains | length == 0
+
+    - name: Set storage domain ID
+      ansible.builtin.set_fact:
+        fetched_storage_domain_id: "{{ storage_info.ovirt_storage_domains[0].id }}"
+
+    - name: Get storage domain available space
+      ansible.builtin.set_fact:
+        storage_available_gb: "{{ (storage_info.ovirt_storage_domains[0].available | int / 1073741824) | round(2) }}"
+
+    # ==================== FETCH VNIC PROFILE ID ====================
+    - name: Get oVirt network info
+      ovirt.ovirt.ovirt_network_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ ovirt_network_name }}"
+      register: network_info
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "Network '{{ ovirt_network_name }}' not found in oVirt"
+      when: network_info.ovirt_networks | length == 0
+
+    - name: Get vNIC profile info
+      ovirt.ovirt.ovirt_vnic_profile_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ ovirt_network_name }}"
+      register: vnic_info
+
+    - name: Fail if vNIC profile not found
+      ansible.builtin.fail:
+        msg: "vNIC profile for network '{{ ovirt_network_name }}' not found"
+      when: vnic_info.ovirt_vnic_profiles | length == 0
+
+    - name: Set vNIC profile ID
+      ansible.builtin.set_fact:
+        fetched_vnic_profile_id: "{{ (vnic_info.ovirt_vnic_profiles | selectattr('name', 'equalto', ovirt_network_name) | first).id }}"
+
+    # ==================== VALIDATE RESOURCES ====================
+    - name: Validate storage capacity
+      ansible.builtin.fail:
+        msg: |
+          Insufficient storage! Need {{ min_storage_gb }}GB, available: {{ storage_available_gb }}GB
+          Consider reducing cluster size or adding storage.
+      when: storage_available_gb | float < min_storage_gb | float
+
+    # ==================== SAVE IDS TO FILE ====================
+    - name: Create ovirt-ids.yml with fetched IDs
+      ansible.builtin.copy:
+        content: |
+          ---
+          # Auto-generated by 01-prerequisites.yml
+          # Do not edit manually - re-run prerequisites to update
+
+          ovirt_cluster_id: "{{ fetched_cluster_id }}"
+          ovirt_storage_domain_id: "{{ fetched_storage_domain_id }}"
+          vnic_profile_id: "{{ fetched_vnic_profile_id }}"
+        dest: "{{ playbook_dir }}/../vars/ovirt-ids.yml"
+        mode: '0600'
+
+    # ==================== SUMMARY ====================
+    - name: Display prerequisites summary
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Prerequisites Validation Summary"
+          - "=============================================="
+          - ""
+          - "Infrastructure Status:"
+          - "  oVirt Engine: {{ ovirt_engine_fqdn }} [OK]"
+          - "  pfSense: {{ pfsense_host }} [{{ 'OK' if pfsense_check is success else 'WARN - not reachable' }}]"
+          - "  HAProxy: {{ 'OK' if (haproxy_check.stdout | default('')) is search('INSTALLED') else 'WARN - not installed' }}"
+          - "  DNS Server: {{ dns_server }} [{{ 'OK' if dns_server_check is success else 'WARN - not reachable' }}]"
+          - ""
+          - "DNS Records:"
+          - "  api.{{ cluster_name }}.{{ base_domain }}: {{ api_dns_check.stdout | default('NOT CONFIGURED') }}"
+          - "  *.apps.{{ cluster_name }}.{{ base_domain }}: {{ apps_dns_check.stdout | default('NOT CONFIGURED') }}"
+          - ""
+          - "oVirt Resource IDs:"
+          - "  Cluster ID: {{ fetched_cluster_id }}"
+          - "  Storage Domain ID: {{ fetched_storage_domain_id }}"
+          - "  vNIC Profile ID: {{ fetched_vnic_profile_id }}"
+          - ""
+          - "Storage Available: {{ storage_available_gb }} GB (need {{ min_storage_gb }} GB)"
+          - ""
+          - "IDs saved to: vars/ovirt-ids.yml"
+          - "=============================================="
+          - ""
+          - "If any warnings shown above, fix them before proceeding."
+          - "Run site.yml to continue: ansible-playbook site.yml -e @vars/okd-agent.yml"
+          - "=============================================="
+
+    # ==================== CLEANUP AUTH ====================
+    - name: Revoke SSO token
+      ovirt.ovirt.ovirt_auth:
+        state: absent
+        ovirt_auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"

@@ -1,0 +1,175 @@
+---
+# OKD Agent-Based Installer Configuration
+# =============================================================================
+# This configuration is used by the openshift-install agent-based installer
+# to deploy OKD on oVirt VMs.
+#
+# Key differences from IPI:
+#   - Uses bootable ISO that VMs boot from
+#   - VIPs managed by external load balancer (pfSense HAProxy)
+#   - No keepalived chicken-and-egg problem
+#   - Works with any virtualization platform
+#
+# Prerequisites:
+#   - oVirt 4.4+ with sufficient resources
+#   - pfSense with HAProxy package installed
+#   - DNS records configured (api.*, api-int.*, *.apps.*)
+#   - DHCP-enabled network OR static IPs configured
+#
+# Usage:
+#   ansible-playbook site.yml -e @vars/okd-agent.yml
+# =============================================================================
+
+# =============================================================================
+# CLUSTER IDENTITY
+# =============================================================================
+cluster_name: "mgmt-devops-okd"
+base_domain: "engatwork.com"
+# Full cluster domain: mgmt-devops-okd.engatwork.com
+
+# =============================================================================
+# OKD VERSION
+# =============================================================================
+# Using OKD 4.16 SCOS (CentOS Stream CoreOS) with Agent-based installer
+okd_version: "4.16.0-0.okd-scos-2024-08-21-155613"
+okd_release_image: "quay.io/okd/scos-release:{{ okd_version }}"
+
+# RHCOS Live ISO Override - Workaround for OKD 4.16 agent-based installer
+# The SCOS/FCOS live ISO has a bug where bootstrap pivot fails
+# Using RHCOS as bootstrap OS fixes this issue
+# See: https://github.com/okd-project/okd/discussions/2035
+rhcos_live_iso_url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.16/4.16.3/rhcos-4.16.3-x86_64-live.x86_64.iso"
+
+# =============================================================================
+# OVIRT CONNECTION
+# =============================================================================
+ovirt_engine_fqdn: "ovirt.engatwork.com"
+ovirt_engine_url: "https://{{ ovirt_engine_fqdn }}/ovirt-engine/api"
+ovirt_engine_user: "admin@ovirt@internalsso"
+ovirt_engine_password: "unix"
+ovirt_engine_insecure: true
+
+# oVirt Resource Names
+ovirt_cluster_name: "Default"
+ovirt_storage_domain_name: "data_lun"
+ovirt_network_name: "Mgmt-DevOps-Net"
+
+# =============================================================================
+# NETWORK CONFIGURATION
+# =============================================================================
+# VIPs are managed by pfSense HAProxy (not keepalived)
+api_vip: "10.10.2.50"
+ingress_vip: "10.10.2.51"
+machine_network_cidr: "10.10.2.0/24"
+machine_network_gateway: "10.10.2.1"
+
+# Cluster internal networks
+cluster_network_cidr: "10.128.0.0/14"
+cluster_network_host_prefix: 23
+service_network_cidr: "172.30.0.0/16"
+
+# =============================================================================
+# NODE CONFIGURATION
+# =============================================================================
+# For Agent-based installer, we define specific node IPs
+# Set to empty for DHCP, or specify static IPs
+
+# Master nodes (control plane) - 3 nodes for HA
+# For agent-based installer, MAC addresses must be predefined
+# The oVirt VM will be created with this MAC address
+# Using IPs 110-112 to avoid conflicts with other devices on the network
+master_nodes:
+  - name: "master-0"
+    ip: "10.10.2.110"
+    mac: "56:6f:1c:a3:01:01"  # Locally administered MAC (56:6f:1c prefix)
+  - name: "master-1"
+    ip: "10.10.2.111"
+    mac: "56:6f:1c:a3:01:02"
+  - name: "master-2"
+    ip: "10.10.2.112"
+    mac: "56:6f:1c:a3:01:03"
+
+# Worker nodes (optional - set to [] for compact cluster where masters are schedulable)
+worker_nodes: []
+# Example with workers:
+# worker_nodes:
+#   - name: "worker-0"
+#     ip: "10.10.2.120"
+#     mac: "56:6f:1c:a3:00:10"
+#   - name: "worker-1"
+#     ip: "10.10.2.121"
+#     mac: "56:6f:1c:a3:00:11"
+
+# =============================================================================
+# CLUSTER SIZING
+# =============================================================================
+# Control plane: minimum 1 for SNO, 3 for HA
+control_plane_replicas: 3
+control_plane_cores: 8
+control_plane_sockets: 1
+control_plane_memory_mb: 24576   # 24GB per master (reduced for multi-node)
+control_plane_disk_gb: 120
+
+# Compute/Worker nodes (0 for compact cluster where masters are schedulable)
+compute_replicas: 0
+compute_cores: 4
+compute_sockets: 1
+compute_memory_mb: 16384
+compute_disk_gb: 120
+
+# =============================================================================
+# SSH & AUTHENTICATION
+# =============================================================================
+ssh_public_key_file: "/root/.ssh/id_rsa.pub"
+ssh_private_key: "/root/.ssh/id_rsa"
+pull_secret_file: "/root/learning/okd/pull-secret.json"
+
+# =============================================================================
+# INSTALLATION PATHS
+# =============================================================================
+okd_tools_dir: "/root/learning/okd/tools"
+okd_install_dir: "/root/learning/okd/install"
+
+# Binaries
+openshift_install_binary: "{{ okd_tools_dir }}/openshift-install"
+oc_binary: "{{ okd_tools_dir }}/oc"
+
+# =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+dns_server: "10.10.1.200"
+
+# =============================================================================
+# PFSENSE HAPROXY CONFIGURATION
+# =============================================================================
+pfsense_host: "192.168.0.101"
+pfsense_user: "admin"
+pfsense_password: "unix"
+
+# HAProxy backend servers (will be populated with node IPs)
+haproxy_api_port: 6443
+haproxy_machine_config_port: 22623
+haproxy_http_port: 80
+haproxy_https_port: 443
+
+# =============================================================================
+# AGENT-BASED INSTALLER SPECIFIC
+# =============================================================================
+# Rendezvous IP - first master node that coordinates installation
+# For SNO, this is the same as the single master node IP
+rendezvous_ip: "10.10.2.110"
+
+# Agent ISO name
+agent_iso_name: "agent.x86_64.iso"
+
+# =============================================================================
+# RESOURCE REQUIREMENTS
+# =============================================================================
+# Minimum storage required for installation (GB)
+min_storage_gb: 500
+
+# =============================================================================
+# TIMEOUTS
+# =============================================================================
+vm_boot_timeout: 600      # Wait for VMs to boot (seconds)
+install_timeout: 3600     # Wait for installation to complete (seconds)

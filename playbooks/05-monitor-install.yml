@@ -1,0 +1,130 @@
+---
+# 05-monitor-install.yml - Monitor OKD installation progress
+#
+# This playbook monitors the installation progress and cluster health.
+# Use this to check status during or after installation.
+#
+# Usage:
+#   ansible-playbook playbooks/05-monitor-install.yml -e @vars/okd-ipi.yml
+
+- name: Monitor OKD Installation Progress
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/okd-ipi.yml
+
+  environment:
+    KUBECONFIG: "{{ okd_install_dir }}/auth/kubeconfig"
+
+  tasks:
+    - name: Check if kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ okd_install_dir }}/auth/kubeconfig"
+      register: kubeconfig
+
+    - name: Check installation log for bootstrap progress
+      ansible.builtin.command:
+        cmd: "tail -20 {{ okd_install_dir }}/.openshift_install.log"
+      register: install_log
+      changed_when: false
+      failed_when: false
+      when: not kubeconfig.stat.exists
+
+    - name: Display bootstrap progress
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Installation In Progress"
+          - "=============================================="
+          - "{{ install_log.stdout_lines | default(['No log found']) }}"
+          - "=============================================="
+      when: not kubeconfig.stat.exists
+
+    - name: Monitor cluster operators
+      when: kubeconfig.stat.exists
+      block:
+        - name: Get cluster nodes
+          ansible.builtin.command:
+            cmd: "{{ oc_binary }} get nodes -o wide"
+          register: nodes
+          changed_when: false
+          failed_when: false
+
+        - name: Get cluster operators status
+          ansible.builtin.command:
+            cmd: "{{ oc_binary }} get clusteroperators"
+          register: co_status
+          changed_when: false
+          failed_when: false
+
+        - name: Get cluster version
+          ansible.builtin.command:
+            cmd: "{{ oc_binary }} get clusterversion"
+          register: cv_status
+          changed_when: false
+          failed_when: false
+
+        - name: Count degraded operators
+          ansible.builtin.shell: |
+            {{ oc_binary }} get clusteroperators -o json | \
+            jq '[.items[] | select(.status.conditions[] | select(.type=="Degraded" and .status=="True"))] | length'
+          register: degraded_count
+          changed_when: false
+          failed_when: false
+
+        - name: Count progressing operators
+          ansible.builtin.shell: |
+            {{ oc_binary }} get clusteroperators -o json | \
+            jq '[.items[] | select(.status.conditions[] | select(.type=="Progressing" and .status=="True"))] | length'
+          register: progressing_count
+          changed_when: false
+          failed_when: false
+
+        - name: Display cluster status
+          ansible.builtin.debug:
+            msg:
+              - "=============================================="
+              - "OKD Cluster Status"
+              - "=============================================="
+              - ""
+              - "CLUSTER VERSION:"
+              - "{{ cv_status.stdout_lines | default(['Not available']) }}"
+              - ""
+              - "NODES:"
+              - "{{ nodes.stdout_lines | default(['Not available']) }}"
+              - ""
+              - "CLUSTER OPERATORS:"
+              - "  Degraded: {{ degraded_count.stdout | default('N/A') }}"
+              - "  Progressing: {{ progressing_count.stdout | default('N/A') }}"
+              - ""
+              - "{{ co_status.stdout_lines | default(['Not available']) }}"
+              - ""
+              - "=============================================="
+              - "Access Commands:"
+              - "  export KUBECONFIG={{ okd_install_dir }}/auth/kubeconfig"
+              - "  {{ oc_binary }} get nodes"
+              - "  {{ oc_binary }} get clusteroperators"
+              - "=============================================="
+
+    - name: Read kubeadmin password
+      ansible.builtin.slurp:
+        src: "{{ okd_install_dir }}/auth/kubeadmin-password"
+      register: kubeadmin_pw
+      when: kubeconfig.stat.exists
+      failed_when: false
+
+    - name: Display access information
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Cluster Access Information"
+          - "=============================================="
+          - "API URL: https://api.{{ cluster_name }}.{{ base_domain }}:6443"
+          - "Console: https://console-openshift-console.apps.{{ cluster_name }}.{{ base_domain }}"
+          - ""
+          - "Username: kubeadmin"
+          - "Password: {{ kubeadmin_pw.content | b64decode | default('See auth/kubeadmin-password') }}"
+          - "=============================================="
+      when: kubeconfig.stat.exists and kubeadmin_pw is defined

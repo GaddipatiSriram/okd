@@ -1,0 +1,57 @@
+apiVersion: v1
+baseDomain: {{ base_domain }}
+metadata:
+  name: {{ cluster_name }}
+compute:
+- architecture: amd64
+  hyperthreading: Enabled
+  name: worker
+  platform:
+    ovirt:
+      cpu:
+        cores: {{ compute_cores }}
+        sockets: 1
+      memoryMB: {{ compute_memory_mb }}
+      osDisk:
+        sizeGB: {{ compute_disk_gb }}
+      vmType: server
+  replicas: {{ compute_replicas }}
+controlPlane:
+  architecture: amd64
+  hyperthreading: Enabled
+  name: master
+  platform:
+    ovirt:
+      cpu:
+        cores: {{ control_plane_cores }}
+        sockets: 1
+      memoryMB: {{ control_plane_memory_mb }}
+      osDisk:
+        sizeGB: {{ control_plane_disk_gb }}
+      vmType: server
+  replicas: {{ control_plane_replicas }}
+networking:
+  clusterNetwork:
+  - cidr: {{ cluster_network_cidr }}
+    hostPrefix: {{ cluster_network_host_prefix }}
+  machineNetwork:
+  - cidr: {{ machine_network_cidr }}
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - {{ service_network_cidr }}
+platform:
+  ovirt:
+    api_vip: {{ api_vip }}
+    ingress_vip: {{ ingress_vip }}
+    ovirt_cluster_id: {{ ovirt_cluster_id }}
+    ovirt_storage_domain_id: {{ ovirt_storage_domain_id }}
+    ovirt_network_name: {{ ovirt_network_name }}
+    vnicProfileID: {{ vnic_profile_id }}
+{% if control_plane_replicas | int < 3 or disable_affinity_groups | default(false) | bool %}
+    # Disable affinity groups for single-node or single-host oVirt deployments
+    # Required when you have fewer than 3 physical oVirt hosts
+    affinityGroups: []
+{% endif %}
+publish: External
+pullSecret: '{{ pull_secret | to_json if pull_secret is mapping else pull_secret }}'
+sshKey: '{{ ssh_public_key }}'

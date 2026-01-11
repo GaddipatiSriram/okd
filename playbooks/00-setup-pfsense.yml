@@ -1,0 +1,349 @@
+---
+# 00-setup-pfsense.yml - Setup pfSense prerequisites for OKD
+#
+# This playbook configures pfSense with:
+#   1. HAProxy package installation (if not present)
+#   2. Persistent Virtual IPs for API and Ingress
+#   3. Basic HAProxy global settings
+#
+# This should be run ONCE before first OKD installation.
+# Subsequent installs can skip this with --skip-tags pfsense
+#
+# Prerequisites:
+#   - pfSense accessible via SSH
+#   - pfsensible.core collection installed
+#
+# Usage:
+#   ansible-playbook playbooks/00-setup-pfsense.yml -e @vars/okd-agent.yml
+#
+# =============================================================================
+
+- name: Setup pfSense Prerequisites for OKD
+  hosts: pfsense
+  gather_facts: false
+  vars:
+    pfsense_vip_interface: "opt1"  # MGMT_DEVOPS interface
+
+  tasks:
+    - name: Display pfSense setup plan
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "pfSense Setup for OKD"
+          - "=============================================="
+          - "API VIP: {{ api_vip }}"
+          - "Ingress VIP: {{ ingress_vip }}"
+          - "VIP Interface: {{ pfsense_vip_interface }}"
+          - "=============================================="
+
+    # =========================================================================
+    # CHECK/INSTALL HAPROXY PACKAGE
+    # =========================================================================
+    - name: Check if HAProxy package is installed
+      ansible.builtin.raw: |
+        php -r '
+        require_once("/etc/inc/pkg-utils.inc");
+        $installed = is_pkg_installed("haproxy-devel") || is_pkg_installed("haproxy");
+        if ($installed) {
+            echo "HAPROXY_INSTALLED";
+        } else {
+            echo "HAPROXY_NOT_INSTALLED";
+        }
+        ' 2>&1
+      register: haproxy_check
+      changed_when: false
+
+    - name: Display HAProxy package status
+      ansible.builtin.debug:
+        msg: "HAProxy package: {{ 'Installed' if 'HAPROXY_INSTALLED' in haproxy_check.stdout else 'Not installed' }}"
+
+    - name: Install HAProxy package if not present
+      ansible.builtin.raw: |
+        php -r '
+        require_once("/etc/inc/pkg-utils.inc");
+
+        echo "Checking for HAProxy package...\n";
+
+        // Check if already installed
+        if (is_pkg_installed("haproxy-devel") || is_pkg_installed("haproxy")) {
+            echo "HAProxy already installed\n";
+            echo "DONE\n";
+            exit(0);
+        }
+
+        echo "Installing HAProxy package...\n";
+
+        // Update package repo first
+        $output = shell_exec("pkg update -f 2>&1");
+        echo "Package update: done\n";
+
+        // Try to install haproxy-devel (preferred) or haproxy
+        $result = shell_exec("pkg install -y pfSense-pkg-haproxy-devel 2>&1");
+        if (strpos($result, "already installed") !== false || strpos($result, "Installing") !== false) {
+            echo "HAProxy-devel installed successfully\n";
+        } else {
+            // Try regular haproxy
+            $result = shell_exec("pkg install -y pfSense-pkg-haproxy 2>&1");
+            echo "HAProxy install result: $result\n";
+        }
+
+        // Verify installation
+        sleep(3);
+        if (is_pkg_installed("haproxy-devel") || is_pkg_installed("haproxy")) {
+            echo "OK: HAProxy package installed successfully\n";
+        } else {
+            echo "WARNING: HAProxy package may need manual installation via pfSense GUI\n";
+            echo "Go to: System > Package Manager > Available Packages > haproxy\n";
+        }
+        echo "DONE\n";
+        ' 2>&1
+      register: haproxy_install
+      when: "'HAPROXY_NOT_INSTALLED' in haproxy_check.stdout"
+      changed_when: "'installed successfully' in (haproxy_install.stdout | default(''))"
+      failed_when: "'DONE' not in (haproxy_install.stdout | default('DONE'))"
+
+    - name: Display HAProxy install result
+      ansible.builtin.debug:
+        msg: "{{ haproxy_install.stdout_lines | default(['HAProxy already installed']) }}"
+      when: haproxy_install is defined
+
+    # Force SSH connection reset to avoid stale connection issues
+    - name: Reset SSH connection
+      ansible.builtin.meta: reset_connection
+
+    - name: Wait for SSH to stabilize
+      ansible.builtin.pause:
+        seconds: 3
+      delegate_to: localhost
+
+    # =========================================================================
+    # CREATE PERSISTENT VIRTUAL IPS
+    # =========================================================================
+    # Use raw module to avoid pfsense_phpshell stderr sensitivity issues
+    - name: Create persistent Virtual IPs for OKD
+      ansible.builtin.raw: |
+        php -r '
+        require_once("/etc/inc/config.inc");
+        require_once("/etc/inc/util.inc");
+        require_once("/etc/inc/interfaces.inc");
+
+        global $config;
+
+        $api_vip = "{{ api_vip }}";
+        $ingress_vip = "{{ ingress_vip }}";
+        $interface = "{{ pfsense_vip_interface }}";
+
+        echo "Configuring Virtual IPs for OKD\n";
+
+        // Initialize VIP config if needed - handle case where it might be a string
+        if (!isset($config["virtualip"]) || !is_array($config["virtualip"])) {
+            $config["virtualip"] = array();
+        }
+        if (!isset($config["virtualip"]["vip"])) {
+            $config["virtualip"]["vip"] = array();
+        } elseif (!is_array($config["virtualip"]["vip"])) {
+            // Single VIP stored as associative array, convert to indexed array
+            $config["virtualip"]["vip"] = array($config["virtualip"]["vip"]);
+        }
+
+        $vips = array(
+            array("descr" => "OKD API VIP", "subnet" => $api_vip),
+            array("descr" => "OKD Ingress VIP", "subnet" => $ingress_vip)
+        );
+
+        // Find max uniqid
+        $max_uniqid = 0;
+        foreach ($config["virtualip"]["vip"] as $vip) {
+            if (isset($vip["uniqid"])) {
+                $id = intval(str_replace("vip", "", $vip["uniqid"]));
+                if ($id > $max_uniqid) $max_uniqid = $id;
+            }
+        }
+
+        $changed = false;
+        foreach ($vips as $vip_def) {
+            $found = false;
+            foreach ($config["virtualip"]["vip"] as $idx => $existing) {
+                if (isset($existing["subnet"]) && $existing["subnet"] == $vip_def["subnet"]) {
+                    echo "VIP already exists: " . $vip_def["subnet"] . " (" . $vip_def["descr"] . ")\n";
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) {
+                $max_uniqid++;
+                echo "Creating VIP: " . $vip_def["subnet"] . " (" . $vip_def["descr"] . ")\n";
+                $config["virtualip"]["vip"][] = array(
+                    "uniqid" => "vip" . $max_uniqid,
+                    "descr" => $vip_def["descr"],
+                    "type" => "single",
+                    "subnet_bits" => "32",
+                    "subnet" => $vip_def["subnet"],
+                    "interface" => $interface,
+                    "mode" => "ipalias"
+                );
+                $changed = true;
+            }
+        }
+
+        if ($changed) {
+            write_config("OKD Virtual IPs configured via Ansible");
+            echo "Configuration saved\n";
+        }
+
+        // Apply VIPs to interface
+        foreach ($config["virtualip"]["vip"] as $vip) {
+            if (isset($vip["subnet"]) && ($vip["subnet"] == $api_vip || $vip["subnet"] == $ingress_vip)) {
+                interface_ipalias_configure($vip);
+            }
+        }
+
+        // Verify VIPs are active
+        sleep(1);
+        $ifconfig = shell_exec("ifconfig -a");
+        $api_active = strpos($ifconfig, $api_vip) !== false;
+        $ingress_active = strpos($ifconfig, $ingress_vip) !== false;
+
+        if ($api_active && $ingress_active) {
+            echo "OK: Both VIPs are active on interface\n";
+        } else {
+            // Fallback: apply via ifconfig
+            $real_if = get_real_interface($interface);
+            if (empty($real_if)) $real_if = "vtnet1";
+
+            if (!$api_active) {
+                shell_exec("ifconfig $real_if alias $api_vip/32");
+                echo "Applied API VIP via ifconfig\n";
+            }
+            if (!$ingress_active) {
+                shell_exec("ifconfig $real_if alias $ingress_vip/32");
+                echo "Applied Ingress VIP via ifconfig\n";
+            }
+        }
+        echo "DONE\n";
+        ' 2>&1
+      register: vip_result
+      changed_when: "'Creating VIP' in (vip_result.stdout | default(''))"
+      failed_when: "'DONE' not in (vip_result.stdout | default(''))"
+
+    - name: Display VIP configuration result
+      ansible.builtin.debug:
+        msg: "{{ vip_result.stdout_lines | default(['VIPs configured']) }}"
+
+    # =========================================================================
+    # INITIALIZE HAPROXY CONFIGURATION
+    # =========================================================================
+    - name: Initialize HAProxy global settings
+      ansible.builtin.raw: |
+        php -r '
+        require_once("/etc/inc/config.inc");
+
+        global $config;
+
+        // Initialize installedpackages if needed
+        if (!isset($config["installedpackages"]) || !is_array($config["installedpackages"])) {
+            $config["installedpackages"] = array();
+        }
+
+        // Initialize HAProxy config structure if needed
+        if (!isset($config["installedpackages"]["haproxy"]) || !is_array($config["installedpackages"]["haproxy"])) {
+            $config["installedpackages"]["haproxy"] = array();
+        }
+
+        // Set global settings if not already configured
+        $haproxy = &$config["installedpackages"]["haproxy"];
+
+        $changed = false;
+
+        if (!isset($haproxy["enable"]) || $haproxy["enable"] != "on") {
+            $haproxy["enable"] = "on";
+            $changed = true;
+            echo "Enabled HAProxy\n";
+        }
+
+        if (!isset($haproxy["maxconn"]) || empty($haproxy["maxconn"])) {
+            $haproxy["maxconn"] = "1000";
+            $changed = true;
+            echo "Set maxconn to 1000\n";
+        }
+
+        if (!isset($haproxy["localstatsport"]) || empty($haproxy["localstatsport"])) {
+            $haproxy["localstatsport"] = "2200";
+            $changed = true;
+            echo "Set stats port to 2200\n";
+        }
+
+        // Initialize empty arrays for backends and frontends
+        if (!isset($haproxy["ha_pools"]) || !is_array($haproxy["ha_pools"])) {
+            $haproxy["ha_pools"] = array("item" => array());
+        }
+        if (!isset($haproxy["ha_backends"]) || !is_array($haproxy["ha_backends"])) {
+            $haproxy["ha_backends"] = array("item" => array());
+        }
+
+        if ($changed) {
+            write_config("HAProxy global settings initialized via Ansible");
+            echo "OK: HAProxy configuration saved\n";
+        } else {
+            echo "OK: HAProxy already configured\n";
+        }
+        echo "DONE\n";
+        ' 2>&1
+      register: haproxy_init
+      changed_when: "'Set' in (haproxy_init.stdout | default('')) or 'Enabled' in (haproxy_init.stdout | default(''))"
+      failed_when: "'DONE' not in (haproxy_init.stdout | default(''))"
+
+    - name: Display HAProxy init result
+      ansible.builtin.debug:
+        msg: "{{ haproxy_init.stdout_lines | default(['HAProxy initialized']) }}"
+
+    - name: Display pfSense setup completion
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "pfSense Setup Complete"
+          - "=============================================="
+          - "- HAProxy package: Checked/Installed"
+          - "- API VIP: {{ api_vip }} (persistent)"
+          - "- Ingress VIP: {{ ingress_vip }} (persistent)"
+          - "- HAProxy: Enabled and initialized"
+          - "=============================================="
+
+# =============================================================================
+# LOCAL PREREQUISITES (SSH key, pull-secret)
+# =============================================================================
+- name: Setup Local Prerequisites
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check if SSH key exists
+      ansible.builtin.stat:
+        path: "{{ ssh_public_key_file }}"
+      register: ssh_key_stat
+
+    - name: Generate SSH key if not exists
+      ansible.builtin.command:
+        cmd: ssh-keygen -t rsa -b 4096 -f "{{ ssh_private_key }}" -N ""
+        creates: "{{ ssh_private_key }}"
+      when: not ssh_key_stat.stat.exists
+
+    - name: Display SSH key status
+      ansible.builtin.debug:
+        msg: "SSH key: {{ 'Exists' if ssh_key_stat.stat.exists else 'Generated' }} at {{ ssh_public_key_file }}"
+
+    - name: Check if pull-secret exists
+      ansible.builtin.stat:
+        path: "{{ pull_secret_file }}"
+      register: pull_secret_stat
+
+    - name: Create minimal pull-secret for OKD (if not exists)
+      ansible.builtin.copy:
+        content: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'
+        dest: "{{ pull_secret_file }}"
+        mode: '0600'
+      when: not pull_secret_stat.stat.exists
+
+    - name: Display pull-secret status
+      ansible.builtin.debug:
+        msg: "Pull secret: {{ 'Created (minimal OKD secret)' if not pull_secret_stat.stat.exists else 'Found' }} at {{ pull_secret_file }}"

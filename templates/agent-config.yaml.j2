@@ -1,0 +1,88 @@
+apiVersion: v1alpha1
+kind: AgentConfig
+metadata:
+  name: {{ cluster_name }}
+{% if rendezvous_ip %}
+rendezvousIP: {{ rendezvous_ip }}
+{% endif %}
+hosts:
+{% for node in master_nodes %}
+  - hostname: {{ cluster_name }}-{{ node.name }}
+    role: master
+    interfaces:
+      - name: enp1s0
+{% if node.mac %}
+        macAddress: {{ node.mac }}
+{% endif %}
+{% if node.ip %}
+    networkConfig:
+      interfaces:
+        - name: enp1s0
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            address:
+              - ip: {{ node.ip }}
+                prefix-length: {{ machine_network_cidr.split('/')[1] }}
+            dhcp: false
+      dns-resolver:
+        config:
+          server:
+            - {{ dns_server }}
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: {{ machine_network_gateway }}
+            next-hop-interface: enp1s0
+{% else %}
+    networkConfig:
+      interfaces:
+        - name: enp1s0
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+{% endif %}
+{% endfor %}
+{% for node in worker_nodes %}
+  - hostname: {{ cluster_name }}-{{ node.name }}
+    role: worker
+    interfaces:
+      - name: enp1s0
+{% if node.mac %}
+        macAddress: {{ node.mac }}
+{% endif %}
+{% if node.ip %}
+    networkConfig:
+      interfaces:
+        - name: enp1s0
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            address:
+              - ip: {{ node.ip }}
+                prefix-length: {{ machine_network_cidr.split('/')[1] }}
+            dhcp: false
+      dns-resolver:
+        config:
+          server:
+            - {{ dns_server }}
+      routes:
+        config:
+          - destination: 0.0.0.0/0
+            next-hop-address: {{ machine_network_gateway }}
+            next-hop-interface: enp1s0
+{% else %}
+    networkConfig:
+      interfaces:
+        - name: enp1s0
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: true
+            dhcp: true
+{% endif %}
+{% endfor %}

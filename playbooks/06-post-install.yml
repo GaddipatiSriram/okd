@@ -1,0 +1,178 @@
+---
+# 06-post-install.yml - Post-installation configuration for OKD
+#
+# This playbook performs post-installation tasks:
+#   1. Configure OperatorHub with public community catalog
+#   2. Verify cluster health
+#
+# Prerequisites:
+#   - OKD cluster fully installed and accessible
+#   - kubeconfig available at install/auth/kubeconfig
+#
+# Usage:
+#   ansible-playbook playbooks/06-post-install.yml -e @vars/okd-agent.yml
+#
+# =============================================================================
+
+- name: OKD Post-Installation Configuration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ okd_install_dir }}/auth/kubeconfig"
+
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+
+  tasks:
+    - name: Verify kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ kubeconfig_path }}"
+      register: kubeconfig_stat
+
+    - name: Fail if kubeconfig not found
+      ansible.builtin.fail:
+        msg: "kubeconfig not found at {{ kubeconfig_path }}. Is the cluster installed?"
+      when: not kubeconfig_stat.stat.exists
+
+    - name: Display post-install configuration plan
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD Post-Installation Configuration"
+          - "=============================================="
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - "Tasks:"
+          - "  - Configure OperatorHub (community catalog)"
+          - "  - Verify cluster health"
+          - "=============================================="
+
+    # =========================================================================
+    # VERIFY CLUSTER HEALTH
+    # =========================================================================
+    - name: Check cluster nodes are ready
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get nodes --no-headers"
+      register: nodes_check
+      changed_when: false
+
+    - name: Display node status
+      ansible.builtin.debug:
+        msg: "{{ nodes_check.stdout_lines }}"
+
+    - name: Verify all nodes are Ready
+      ansible.builtin.fail:
+        msg: "Not all nodes are Ready. Please wait for cluster to stabilize."
+      when: "'NotReady' in nodes_check.stdout"
+
+    # =========================================================================
+    # CONFIGURE OPERATORHUB
+    # =========================================================================
+    - name: Check current OperatorHub configuration
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get operatorhub cluster -o jsonpath='{.spec.disableAllDefaultSources}'"
+      register: operatorhub_config
+      changed_when: false
+      failed_when: false
+
+    - name: Disable default Red Hat catalog sources
+      ansible.builtin.command:
+        cmd: >
+          {{ oc_binary }} patch operatorhub cluster --type merge
+          -p '{"spec":{"disableAllDefaultSources":true}}'
+      register: disable_catalogs
+      changed_when: "'patched' in disable_catalogs.stdout"
+      when: operatorhub_config.stdout != 'true'
+
+    - name: Display catalog disable result
+      ansible.builtin.debug:
+        msg: "Default Red Hat catalog sources disabled (require subscription)"
+      when: disable_catalogs.changed | default(false)
+
+    - name: Check if OperatorHub.io catalog exists
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get catalogsource operatorhubio-catalog -n openshift-marketplace"
+      register: catalog_check
+      changed_when: false
+      failed_when: false
+
+    - name: Create OperatorHub.io community catalog
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} apply -f -"
+        stdin: |
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: CatalogSource
+          metadata:
+            name: operatorhubio-catalog
+            namespace: openshift-marketplace
+          spec:
+            sourceType: grpc
+            image: quay.io/operatorhubio/catalog:latest
+            displayName: OperatorHub.io Community Operators
+            publisher: OperatorHub.io
+            updateStrategy:
+              registryPoll:
+                interval: 60m
+      register: create_catalog
+      changed_when: "'created' in create_catalog.stdout"
+      when: catalog_check.rc != 0
+
+    - name: Wait for catalog pod to be ready
+      ansible.builtin.command:
+        cmd: >
+          {{ oc_binary }} wait pod
+          -l olm.catalogSource=operatorhubio-catalog
+          -n openshift-marketplace
+          --for=condition=Ready
+          --timeout=120s
+      register: catalog_wait
+      changed_when: false
+      retries: 3
+      delay: 10
+      until: catalog_wait.rc == 0
+
+    - name: Count available operators
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get packagemanifests --no-headers"
+      register: operators_list
+      changed_when: false
+
+    - name: Display OperatorHub status
+      ansible.builtin.debug:
+        msg:
+          - "OperatorHub configured successfully"
+          - "Available operators: {{ operators_list.stdout_lines | length }}"
+
+    # =========================================================================
+    # DISPLAY CLUSTER ACCESS INFO
+    # =========================================================================
+    - name: Get kubeadmin password
+      ansible.builtin.slurp:
+        src: "{{ okd_install_dir }}/auth/kubeadmin-password"
+      register: kubeadmin_password
+
+    - name: Get console URL
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get route console -n openshift-console -o jsonpath='{.spec.host}'"
+      register: console_url
+      changed_when: false
+
+    - name: Display post-install summary
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD Post-Installation Complete"
+          - "=============================================="
+          - ""
+          - "Console URL: https://{{ console_url.stdout }}"
+          - "Username: kubeadmin"
+          - "Password: {{ kubeadmin_password.content | b64decode }}"
+          - ""
+          - "API URL: https://api.{{ cluster_name }}.{{ base_domain }}:6443"
+          - ""
+          - "OperatorHub: {{ operators_list.stdout_lines | length }} operators available"
+          - ""
+          - "To use oc CLI:"
+          - "  export KUBECONFIG={{ kubeconfig_path }}"
+          - "  {{ oc_binary }} get nodes"
+          - ""
+          - "=============================================="

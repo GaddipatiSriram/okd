@@ -1,0 +1,427 @@
+---
+# 05-wait-install.yml - Wait for OKD Installation to Complete
+#
+# This playbook monitors the agent-based installation progress:
+#   1. Waits for cluster to reach "ready" state
+#   2. Triggers installation via assisted-service API
+#   3. Monitors disk write progress
+#   4. Changes VM boot order after disk write
+#   5. Waits for bootstrap to complete
+#   6. Waits for full installation to complete
+#   7. Verifies cluster operators
+#
+# Prerequisites:
+#   - VMs deployed and booted from agent ISO (04-deploy-vms.yml)
+#   - HAProxy configured
+#
+# Usage:
+#   ansible-playbook playbooks/05-wait-install.yml -e @vars/okd-agent.yml
+#
+# =============================================================================
+
+- name: Wait for OKD Installation
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    assisted_service_port: 8090
+    cluster_ready_timeout: 600  # 10 minutes to reach ready state
+    disk_write_timeout: 1200    # 20 minutes for disk write
+    bootstrap_timeout: 2400     # 40 minutes for bootstrap
+
+  tasks:
+    - name: Load node IPs from file
+      ansible.builtin.include_vars:
+        file: "{{ okd_install_dir }}/node-ips.yml"
+
+    - name: Display monitoring message
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Monitoring OKD Agent-based Installation"
+          - "=============================================="
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - "Rendezvous IP: {{ rendezvous_ip }}"
+          - "This may take 30-60 minutes..."
+          - ""
+          - "The agent-based installer is running on the VMs."
+          - "Nodes will discover each other and form a cluster."
+          - "=============================================="
+
+    # =========================================================================
+    # PHASE 1: Wait for cluster to reach "ready" state
+    # =========================================================================
+    - name: Wait for assisted-service API to be available
+      ansible.builtin.uri:
+        url: "http://{{ rendezvous_ip }}:{{ assisted_service_port }}/api/assisted-install/v2/clusters"
+        method: GET
+        return_content: true
+      register: api_check
+      until: api_check.status == 200
+      retries: 60
+      delay: 10
+      ignore_errors: true
+
+    - name: Wait for cluster to reach ready state
+      ansible.builtin.uri:
+        url: "http://{{ rendezvous_ip }}:{{ assisted_service_port }}/api/assisted-install/v2/clusters"
+        method: GET
+        return_content: true
+      register: cluster_status
+      until: >
+        cluster_status.status == 200 and
+        cluster_status.json | length > 0 and
+        cluster_status.json[0].status in ['ready', 'preparing-for-installation', 'installing']
+      retries: "{{ (cluster_ready_timeout / 10) | int }}"
+      delay: 10
+      failed_when: false
+
+    - name: Display cluster status
+      ansible.builtin.debug:
+        msg: "Cluster status: {{ cluster_status.json[0].status | default('unknown') }} - {{ cluster_status.json[0].status_info | default('') }}"
+      when: cluster_status.json is defined and cluster_status.json | length > 0
+
+    # =========================================================================
+    # PHASE 2: Trigger installation if cluster is ready but not installing
+    # =========================================================================
+    - name: Get cluster ID
+      ansible.builtin.set_fact:
+        okd_cluster_id: "{{ cluster_status.json[0].id }}"
+      when: cluster_status.json is defined and cluster_status.json | length > 0
+
+    - name: Trigger installation if cluster is ready
+      ansible.builtin.uri:
+        url: "http://{{ rendezvous_ip }}:{{ assisted_service_port }}/api/assisted-install/v2/clusters/{{ okd_cluster_id }}/actions/install"
+        method: POST
+        status_code: [200, 202, 409]  # 409 = already installing
+      register: install_trigger
+      when:
+        - okd_cluster_id is defined
+        - cluster_status.json[0].status == 'ready'
+
+    - name: Display installation trigger result
+      ansible.builtin.debug:
+        msg: "Installation triggered: {{ install_trigger.status | default('already in progress') }}"
+      when: install_trigger is defined
+
+    # =========================================================================
+    # PHASE 3: Monitor installation progress and disk write (all hosts)
+    # =========================================================================
+    - name: Monitor installation progress for all hosts
+      ansible.builtin.uri:
+        url: "http://{{ rendezvous_ip }}:{{ assisted_service_port }}/api/assisted-install/v2/clusters/{{ okd_cluster_id }}"
+        method: GET
+        return_content: true
+      register: install_progress
+      until: >
+        install_progress.status != 200 or
+        (install_progress.json.hosts | default([]) |
+         selectattr('progress.current_stage', 'defined') |
+         selectattr('progress.current_stage', 'search', 'Writing image to disk') |
+         list | length == install_progress.json.hosts | length)
+      retries: "{{ (disk_write_timeout / 15) | int }}"
+      delay: 15
+      failed_when: false
+      when: okd_cluster_id is defined
+
+    - name: Display installation progress for all hosts
+      ansible.builtin.debug:
+        msg: |
+          {% for host in install_progress.json.hosts | default([]) %}
+          Host: {{ host.requested_hostname | default('unknown') }}
+            Status: {{ host.status | default('unknown') }}
+            Progress: {{ host.progress.current_stage | default('unknown') }}
+          {% endfor %}
+      when: install_progress.json is defined and install_progress.json.hosts is defined
+
+    # =========================================================================
+    # PHASE 4: Change VM boot order after disk write (all hosts)
+    # =========================================================================
+    - name: Wait for all hosts to complete disk write (installing-pending-user-action or Rebooting)
+      ansible.builtin.uri:
+        url: "http://{{ rendezvous_ip }}:{{ assisted_service_port }}/api/assisted-install/v2/clusters/{{ okd_cluster_id }}"
+        method: GET
+        return_content: true
+      register: disk_write_check
+      until: >
+        disk_write_check.status != 200 or
+        (disk_write_check.json.status | default('') in ['installing-pending-user-action', 'installed', 'finalizing']) or
+        (disk_write_check.json.hosts | default([]) |
+         selectattr('progress.current_stage', 'defined') |
+         selectattr('progress.current_stage', 'search', 'Rebooting|Configuring|Waiting for control plane|Done') |
+         list | length >= (disk_write_check.json.hosts | length / 2) | int)
+      retries: 120
+      delay: 10
+      failed_when: false
+      when: okd_cluster_id is defined
+
+    - name: Display disk write status for all hosts
+      ansible.builtin.debug:
+        msg: |
+          Cluster Status: {{ disk_write_check.json.status | default('unknown') }}
+          {% for host in disk_write_check.json.hosts | default([]) %}
+          Host: {{ host.requested_hostname | default('unknown') }} - Status: {{ host.status | default('unknown') }} - Stage: {{ host.progress.current_stage | default('unknown') }}
+          {% endfor %}
+      when: disk_write_check.json is defined and disk_write_check.json.hosts is defined
+
+    - name: Authenticate to oVirt Engine
+      ovirt.ovirt.ovirt_auth:
+        url: "{{ ovirt_engine_url }}"
+        username: "{{ ovirt_engine_user }}"
+        password: "{{ ovirt_engine_password }}"
+        insecure: "{{ ovirt_engine_insecure }}"
+      register: ovirt_auth
+
+    - name: Get list of OKD VMs
+      ovirt.ovirt.ovirt_vm_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ cluster_name }}-*"
+      register: okd_vms
+
+    # -------------------------------------------------------------------------
+    # CRITICAL FIX: Must STOP VMs, change boot order, then START them
+    # Just changing boot order while running doesn't work - VMs run from RAM
+    # -------------------------------------------------------------------------
+    - name: Identify non-bootstrap VMs that need boot order fix
+      ansible.builtin.set_fact:
+        non_bootstrap_vms: "{{ okd_vms.ovirt_vms | selectattr('name', 'ne', cluster_name + '-' + master_nodes[0].name) | list }}"
+        bootstrap_vm: "{{ okd_vms.ovirt_vms | selectattr('name', 'eq', cluster_name + '-' + master_nodes[0].name) | list }}"
+
+    - name: Display VMs to reconfigure
+      ansible.builtin.debug:
+        msg:
+          - "Bootstrap VM (master-0): {{ bootstrap_vm | map(attribute='name') | list }}"
+          - "Non-bootstrap VMs to fix: {{ non_bootstrap_vms | map(attribute='name') | list }}"
+
+    - name: Stop non-bootstrap VMs to change boot order
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        state: stopped
+        wait: true
+        timeout: 300
+      loop: "{{ non_bootstrap_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: non_bootstrap_vms | length > 0
+      ignore_errors: true
+
+    - name: Wait for VMs to fully stop
+      ansible.builtin.pause:
+        seconds: 10
+      when: non_bootstrap_vms | length > 0
+
+    - name: Eject CD/ISO from non-bootstrap VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        cd_iso: ""
+      loop: "{{ non_bootstrap_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: non_bootstrap_vms | length > 0
+      ignore_errors: true
+
+    - name: Change boot order to HD first on non-bootstrap VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        boot_devices:
+          - hd
+          - cdrom
+      loop: "{{ non_bootstrap_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: non_bootstrap_vms | length > 0
+
+    - name: Start non-bootstrap VMs to boot from disk
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        state: running
+        wait: true
+      loop: "{{ non_bootstrap_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: non_bootstrap_vms | length > 0
+
+    - name: Display non-bootstrap VMs reconfigured
+      ansible.builtin.debug:
+        msg: "Non-bootstrap VMs ({{ non_bootstrap_vms | map(attribute='name') | join(', ') }}) reconfigured to boot from HD."
+      when: non_bootstrap_vms | length > 0
+
+    # Handle bootstrap VM (master-0) - it will reboot itself after bootstrap completes
+    - name: Eject CD/ISO from bootstrap VM (will reboot itself)
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        cd_iso: ""
+      loop: "{{ bootstrap_vm }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: bootstrap_vm | length > 0
+      ignore_errors: true
+
+    - name: Change boot order to HD first on bootstrap VM
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ item.name }}"
+        boot_devices:
+          - hd
+          - cdrom
+      loop: "{{ bootstrap_vm }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: bootstrap_vm | length > 0
+      ignore_errors: true
+
+    - name: Display boot order change message
+      ansible.builtin.debug:
+        msg: "All VMs reconfigured to boot from hard disk. Non-bootstrap VMs restarted. Waiting for bootstrap..."
+
+    # =========================================================================
+    # PHASE 5: Wait for bootstrap to complete
+    # =========================================================================
+    - name: Wait for VMs to boot from disk and initialize
+      ansible.builtin.pause:
+        seconds: 120
+        prompt: "Waiting 2 minutes for VMs to boot from disk and initialize..."
+
+    - name: Verify non-bootstrap VMs are running
+      ovirt.ovirt.ovirt_vm_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ item.name }}"
+      register: vm_status_check
+      loop: "{{ non_bootstrap_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      until: vm_status_check.ovirt_vms | length > 0 and vm_status_check.ovirt_vms[0].status == 'up'
+      retries: 10
+      delay: 10
+      when: non_bootstrap_vms | length > 0
+
+    - name: Wait for bootstrap to complete
+      ansible.builtin.command:
+        cmd: >
+          {{ openshift_install_binary }} agent wait-for bootstrap-complete
+          --dir={{ okd_install_dir }}
+          --log-level=info
+      environment:
+        OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE: "{{ okd_release_image }}"
+      register: bootstrap_wait
+      changed_when: false
+      async: "{{ bootstrap_timeout }}"
+      poll: 30
+      ignore_errors: true
+
+    - name: Display bootstrap status
+      ansible.builtin.debug:
+        msg: "{{ bootstrap_wait.stderr_lines | default(bootstrap_wait.stdout_lines) | default(['Bootstrap phase completed or skipped']) }}"
+
+    # =========================================================================
+    # PHASE 6: Wait for installation to complete
+    # =========================================================================
+    - name: Wait for installation to complete
+      ansible.builtin.command:
+        cmd: >
+          {{ openshift_install_binary }} agent wait-for install-complete
+          --dir={{ okd_install_dir }}
+          --log-level=info
+      environment:
+        OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE: "{{ okd_release_image }}"
+      register: install_wait
+      changed_when: false
+      async: 3600  # 60 minutes
+      poll: 60
+      ignore_errors: true
+
+    - name: Display installation status
+      ansible.builtin.debug:
+        msg: "{{ install_wait.stderr_lines | default(install_wait.stdout_lines) | default(['Installation completed or timeout']) }}"
+
+    # =========================================================================
+    # PHASE 7: Verify cluster and display results
+    # =========================================================================
+    - name: Check kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ okd_install_dir }}/auth/kubeconfig"
+      register: kubeconfig_stat
+
+    - name: Copy kubeconfig to standard location
+      ansible.builtin.copy:
+        src: "{{ okd_install_dir }}/auth/kubeconfig"
+        dest: "/root/.kube/config"
+        mode: '0600'
+        remote_src: true
+      when: kubeconfig_stat.stat.exists
+
+    - name: Get cluster nodes
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get nodes -o wide"
+      environment:
+        KUBECONFIG: "{{ okd_install_dir }}/auth/kubeconfig"
+      register: nodes_output
+      changed_when: false
+      failed_when: false
+      retries: 10
+      delay: 30
+      until: nodes_output.rc == 0
+
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        msg: "{{ nodes_output.stdout_lines | default(['Unable to get nodes']) }}"
+
+    - name: Get cluster operators status
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get clusteroperators"
+      environment:
+        KUBECONFIG: "{{ okd_install_dir }}/auth/kubeconfig"
+      register: co_output
+      changed_when: false
+      failed_when: false
+
+    - name: Display cluster operators
+      ansible.builtin.debug:
+        msg: "{{ co_output.stdout_lines | default(['Unable to get cluster operators']) }}"
+
+    - name: Get console URL
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get route -n openshift-console console -o jsonpath='{.spec.host}'"
+      environment:
+        KUBECONFIG: "{{ okd_install_dir }}/auth/kubeconfig"
+      register: console_url
+      changed_when: false
+      failed_when: false
+
+    - name: Get kubeadmin password
+      ansible.builtin.slurp:
+        src: "{{ okd_install_dir }}/auth/kubeadmin-password"
+      register: kubeadmin_password
+      failed_when: false
+
+    - name: Revoke oVirt SSO token
+      ovirt.ovirt.ovirt_auth:
+        state: absent
+        ovirt_auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+      when: ovirt_auth is defined
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD Installation Complete!"
+          - "=============================================="
+          - ""
+          - "Console URL: https://{{ console_url.stdout | default('console-openshift-console.apps.' + cluster_name + '.' + base_domain) }}"
+          - "Username: kubeadmin"
+          - "Password: {{ kubeadmin_password.content | default('') | b64decode | default('See ' + okd_install_dir + '/auth/kubeadmin-password') }}"
+          - ""
+          - "API URL: https://api.{{ cluster_name }}.{{ base_domain }}:6443"
+          - ""
+          - "Kubeconfig: {{ okd_install_dir }}/auth/kubeconfig"
+          - "  Also copied to: /root/.kube/config"
+          - ""
+          - "To use the cluster:"
+          - "  export KUBECONFIG={{ okd_install_dir }}/auth/kubeconfig"
+          - "  {{ oc_binary }} get nodes"
+          - "=============================================="

@@ -1,0 +1,613 @@
+---
+# 04-deploy-vms.yml - Deploy OKD VMs on oVirt
+#
+# This playbook:
+#   1. Uploads the agent ISO to oVirt
+#   2. Creates master and worker VMs
+#   3. Boots VMs from the ISO
+#   4. Waits for VMs to get IPs from DHCP
+#   5. Configures HAProxy with the discovered IPs (via pfsensible modules)
+#
+# Prerequisites:
+#   - Agent ISO generated (03-generate-agent-iso.yml)
+#   - oVirt cluster configured
+#   - DHCP enabled on the target network
+#   - pfSense with HAProxy package installed
+#
+# Usage:
+#   ansible-playbook playbooks/04-deploy-vms.yml -e @vars/okd-agent.yml
+#
+# =============================================================================
+
+- name: Deploy OKD VMs on oVirt
+  hosts: localhost
+  gather_facts: false
+  vars:
+    iso_domain_name: "{{ ovirt_storage_domain_name }}"
+
+  tasks:
+    - name: Check agent ISO exists
+      ansible.builtin.stat:
+        path: "{{ okd_install_dir }}/{{ agent_iso_name }}"
+      register: iso_check
+
+    - name: Fail if ISO not found
+      ansible.builtin.fail:
+        msg: "Agent ISO not found at {{ okd_install_dir }}/{{ agent_iso_name }}. Run 03-generate-agent-iso.yml first."
+      when: not iso_check.stat.exists
+
+    - name: Display deployment plan
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD VM Deployment Plan"
+          - "=============================================="
+          - "oVirt Engine: {{ ovirt_engine_fqdn }}"
+          - "Cluster: {{ ovirt_cluster_name }}"
+          - "Network: {{ ovirt_network_name }}"
+          - ""
+          - "VMs to create:"
+          - "  Masters: {{ control_plane_replicas }}"
+          - "  Workers: {{ compute_replicas }}"
+          - ""
+          - "Resources per master:"
+          - "  CPU: {{ control_plane_cores }} cores"
+          - "  Memory: {{ control_plane_memory_mb }} MB"
+          - "  Disk: {{ control_plane_disk_gb }} GB"
+          - "=============================================="
+
+    - name: Authenticate to oVirt Engine
+      ovirt.ovirt.ovirt_auth:
+        url: "{{ ovirt_engine_url }}"
+        username: "{{ ovirt_engine_user }}"
+        password: "{{ ovirt_engine_password }}"
+        insecure: "{{ ovirt_engine_insecure }}"
+      register: ovirt_auth
+
+    - name: Get oVirt cluster info
+      ovirt.ovirt.ovirt_cluster_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ ovirt_cluster_name }}"
+      register: cluster_info
+
+    - name: Set cluster ID
+      ansible.builtin.set_fact:
+        ovirt_cluster_id: "{{ cluster_info.ovirt_clusters[0].id }}"
+
+    - name: Get storage domain info
+      ovirt.ovirt.ovirt_storage_domain_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ ovirt_storage_domain_name }}"
+      register: storage_info
+
+    - name: Set storage domain ID
+      ansible.builtin.set_fact:
+        ovirt_storage_domain_id: "{{ storage_info.ovirt_storage_domains[0].id }}"
+
+    - name: Check if ISO already exists in oVirt
+      ovirt.ovirt.ovirt_disk_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ cluster_name }}-agent-iso"
+      register: existing_iso
+
+    - name: Upload agent ISO to oVirt
+      ovirt.ovirt.ovirt_disk:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-agent-iso"
+        upload_image_path: "{{ okd_install_dir }}/{{ agent_iso_name }}"
+        storage_domain: "{{ ovirt_storage_domain_name }}"
+        size: "{{ iso_check.stat.size }}"
+        format: raw
+        content_type: iso
+        bootable: true
+        wait: true
+      register: iso_upload
+      when: existing_iso.ovirt_disks | length == 0
+
+    - name: Display ISO upload result
+      ansible.builtin.debug:
+        msg: "{{ 'ISO uploaded: ' + cluster_name + '-agent-iso' if existing_iso.ovirt_disks | length == 0 else 'ISO already exists: ' + cluster_name + '-agent-iso' }}"
+
+    # =========================================================================
+    # CREATE MASTER VMS
+    # =========================================================================
+    - name: Create master VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}"
+        cluster: "{{ ovirt_cluster_name }}"
+        memory: "{{ control_plane_memory_mb }}MiB"
+        memory_guaranteed: "{{ control_plane_memory_mb }}MiB"
+        cpu_cores: "{{ control_plane_cores }}"
+        cpu_sockets: "{{ control_plane_sockets }}"
+        operating_system: rhcos_x64
+        type: server
+        high_availability: true
+        cd_iso: "{{ cluster_name }}-agent-iso"
+        boot_devices:
+          - cdrom
+          - hd
+        nics:
+          - name: nic1
+            profile_name: "{{ ovirt_network_name }}"
+            mac_address: "{{ item.mac }}"
+        state: present
+        wait: true
+      loop: "{{ master_nodes }}"
+      register: master_vms
+
+    - name: Create master VM disks
+      ovirt.ovirt.ovirt_disk:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}-disk"
+        vm_name: "{{ cluster_name }}-{{ item.name }}"
+        size: "{{ control_plane_disk_gb }}GiB"
+        format: cow
+        interface: virtio_scsi
+        storage_domain: "{{ ovirt_storage_domain_name }}"
+        bootable: true
+        wait: true
+      loop: "{{ master_nodes }}"
+
+    # =========================================================================
+    # CREATE WORKER VMS (if any)
+    # =========================================================================
+    - name: Create worker VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}"
+        cluster: "{{ ovirt_cluster_name }}"
+        memory: "{{ compute_memory_mb }}MiB"
+        memory_guaranteed: "{{ compute_memory_mb }}MiB"
+        cpu_cores: "{{ compute_cores }}"
+        cpu_sockets: "{{ compute_sockets }}"
+        operating_system: rhcos_x64
+        type: server
+        cd_iso: "{{ cluster_name }}-agent-iso"
+        boot_devices:
+          - cdrom
+          - hd
+        nics:
+          - name: nic1
+            profile_name: "{{ ovirt_network_name }}"
+            mac_address: "{{ item.mac | default(omit) }}"
+        state: present
+        wait: true
+      loop: "{{ worker_nodes }}"
+      when: worker_nodes | length > 0
+      register: worker_vms
+
+    - name: Create worker VM disks
+      ovirt.ovirt.ovirt_disk:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}-disk"
+        vm_name: "{{ cluster_name }}-{{ item.name }}"
+        size: "{{ compute_disk_gb }}GiB"
+        format: cow
+        interface: virtio_scsi
+        storage_domain: "{{ ovirt_storage_domain_name }}"
+        bootable: true
+        wait: true
+      loop: "{{ worker_nodes }}"
+      when: worker_nodes | length > 0
+
+    # =========================================================================
+    # START VMS
+    # =========================================================================
+    - name: Start master VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}"
+        state: running
+        wait: true
+      loop: "{{ master_nodes }}"
+
+    - name: Start worker VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}"
+        state: running
+        wait: true
+      loop: "{{ worker_nodes }}"
+      when: worker_nodes | length > 0
+
+    # =========================================================================
+    # SET IPs - use static IPs or wait for DHCP
+    # =========================================================================
+    - name: Check if static IPs are configured
+      ansible.builtin.set_fact:
+        use_static_ips: "{{ master_nodes | selectattr('ip', 'defined') | selectattr('ip') | list | length == master_nodes | length }}"
+
+    - name: Use static IPs from configuration
+      ansible.builtin.set_fact:
+        master_ips: "{{ master_nodes | map(attribute='ip') | list }}"
+      when: use_static_ips
+
+    - name: Wait for master VMs to get IPs (DHCP mode only)
+      ovirt.ovirt.ovirt_vm_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ cluster_name }}-{{ item.name }}"
+        fetch_nested: true
+        nested_attributes:
+          - reported_devices
+      register: master_vm_info
+      until: >
+        master_vm_info.ovirt_vms | length > 0 and
+        master_vm_info.ovirt_vms[0].reported_devices | default([]) | length > 0 and
+        master_vm_info.ovirt_vms[0].reported_devices |
+          selectattr('ips', 'defined') |
+          map(attribute='ips') |
+          flatten |
+          selectattr('version', 'equalto', 'v4') |
+          list | length > 0
+      retries: 60
+      delay: 10
+      loop: "{{ master_nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not use_static_ips
+
+    - name: Extract master IPs from DHCP
+      ansible.builtin.set_fact:
+        master_ips: >-
+          {{
+            master_vm_info.results | map(attribute='ovirt_vms') | flatten |
+            map(attribute='reported_devices') | flatten |
+            selectattr('ips', 'defined') |
+            map(attribute='ips') | flatten |
+            selectattr('version', 'equalto', 'v4') |
+            map(attribute='address') | list
+          }}
+      when: not use_static_ips
+
+    - name: Display discovered IPs
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "VMs Created and Running"
+          - "=============================================="
+          - "Master IPs: {{ master_ips }}"
+          - "=============================================="
+
+    # =========================================================================
+    # SAVE NODE IPS AND REVOKE AUTH
+    # =========================================================================
+    - name: Set rendezvous IP (first master)
+      ansible.builtin.set_fact:
+        rendezvous_ip: "{{ master_ips[0] }}"
+
+    - name: Save discovered IPs to file
+      ansible.builtin.copy:
+        content: |
+          # OKD Node IPs (discovered via DHCP)
+          # Generated by 04-deploy-vms.yml
+          master_ips: {{ master_ips | to_yaml }}
+          rendezvous_ip: "{{ rendezvous_ip }}"
+        dest: "{{ okd_install_dir }}/node-ips.yml"
+        mode: '0644'
+
+    - name: Revoke oVirt SSO token
+      ovirt.ovirt.ovirt_auth:
+        state: absent
+        ovirt_auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+
+# =============================================================================
+# CONFIGURE HAPROXY ON PFSENSE
+# =============================================================================
+- name: Configure pfSense HAProxy for OKD
+  hosts: pfsense
+  gather_facts: false
+
+  tasks:
+    - name: Load node IPs from file
+      ansible.builtin.include_vars:
+        file: "{{ okd_install_dir }}/node-ips.yml"
+
+    - name: Set backend IPs from discovered master IPs
+      ansible.builtin.set_fact:
+        backend_ips: "{{ master_ips }}"
+        ingress_ips: "{{ master_ips }}"
+
+    - name: Display HAProxy configuration plan
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Configuring pfSense HAProxy for OKD"
+          - "=============================================="
+          - "API VIP: {{ api_vip }}:6443"
+          - "Ingress VIP: {{ ingress_vip }}:443"
+          - "Backend IPs: {{ backend_ips }}"
+          - "=============================================="
+
+    # =========================================================================
+    # CREATE BACKENDS
+    # =========================================================================
+    - name: Create OKD API backend
+      pfsensible.core.pfsense_haproxy_backend:
+        name: okd-api-backend
+        balance: roundrobin
+        check_type: Basic
+        check_frequency: 5000
+        connection_timeout: 5000
+        server_timeout: 50000
+        state: present
+
+    - name: Create OKD Machine Config backend
+      pfsensible.core.pfsense_haproxy_backend:
+        name: okd-mcs-backend
+        balance: roundrobin
+        check_type: Basic
+        check_frequency: 5000
+        connection_timeout: 5000
+        server_timeout: 50000
+        state: present
+
+    - name: Create OKD HTTP Ingress backend
+      pfsensible.core.pfsense_haproxy_backend:
+        name: okd-http-backend
+        balance: roundrobin
+        check_type: Basic
+        check_frequency: 5000
+        connection_timeout: 5000
+        server_timeout: 50000
+        state: present
+
+    - name: Create OKD HTTPS Ingress backend
+      pfsensible.core.pfsense_haproxy_backend:
+        name: okd-https-backend
+        balance: roundrobin
+        check_type: Basic
+        check_frequency: 5000
+        connection_timeout: 5000
+        server_timeout: 50000
+        state: present
+
+    # =========================================================================
+    # ADD BACKEND SERVERS
+    # =========================================================================
+    - name: Add API backend servers
+      pfsensible.core.pfsense_haproxy_backend_server:
+        backend: okd-api-backend
+        name: "master-{{ idx }}"
+        address: "{{ item }}"
+        port: 6443
+        state: present
+      loop: "{{ backend_ips }}"
+      loop_control:
+        index_var: idx
+
+    - name: Add Machine Config backend servers
+      pfsensible.core.pfsense_haproxy_backend_server:
+        backend: okd-mcs-backend
+        name: "master-{{ idx }}"
+        address: "{{ item }}"
+        port: 22623
+        state: present
+      loop: "{{ backend_ips }}"
+      loop_control:
+        index_var: idx
+
+    - name: Add HTTP Ingress backend servers
+      pfsensible.core.pfsense_haproxy_backend_server:
+        backend: okd-http-backend
+        name: "ingress-{{ idx }}"
+        address: "{{ item }}"
+        port: 80
+        state: present
+      loop: "{{ ingress_ips }}"
+      loop_control:
+        index_var: idx
+
+    - name: Add HTTPS Ingress backend servers
+      pfsensible.core.pfsense_haproxy_backend_server:
+        backend: okd-https-backend
+        name: "ingress-{{ idx }}"
+        address: "{{ item }}"
+        port: 443
+        state: present
+      loop: "{{ ingress_ips }}"
+      loop_control:
+        index_var: idx
+
+    # =========================================================================
+    # CREATE FRONTENDS (via phpshell - no native module available)
+    # =========================================================================
+    - name: Configure HAProxy frontends
+      pfsensible.core.pfsense_phpshell:
+        cmd: |
+          require_once("config.inc");
+          require_once("util.inc");
+          require_once("haproxy/haproxy.inc");
+
+          global $config;
+
+          // Initialize HAProxy config if needed
+          if (!is_array($config['installedpackages']['haproxy']['ha_backends'])) {
+              $config['installedpackages']['haproxy']['ha_backends'] = array();
+          }
+
+          // Frontend definitions with correct pfSense HAProxy structure
+          // IMPORTANT: backend_serverpool must be the pool NAME, not ID
+          // IMPORTANT: a_extaddr must be used for bind configuration
+          $frontends = array(
+              array(
+                  'id' => '200',
+                  'name' => 'okd-api-frontend',
+                  'desc' => 'OKD API Frontend',
+                  'status' => 'active',
+                  'type' => 'tcp',
+                  'a_extaddr' => array('item' => array(
+                      array('extaddr' => 'custom', 'extaddr_custom' => '{{ api_vip }}', 'extaddr_port' => '6443')
+                  )),
+                  'backend_serverpool' => 'okd-api-backend'
+              ),
+              array(
+                  'id' => '201',
+                  'name' => 'okd-mcs-frontend',
+                  'desc' => 'OKD Machine Config Frontend',
+                  'status' => 'active',
+                  'type' => 'tcp',
+                  'a_extaddr' => array('item' => array(
+                      array('extaddr' => 'custom', 'extaddr_custom' => '{{ api_vip }}', 'extaddr_port' => '22623')
+                  )),
+                  'backend_serverpool' => 'okd-mcs-backend'
+              ),
+              array(
+                  'id' => '202',
+                  'name' => 'okd-http-frontend',
+                  'desc' => 'OKD HTTP Ingress Frontend',
+                  'status' => 'active',
+                  'type' => 'tcp',
+                  'a_extaddr' => array('item' => array(
+                      array('extaddr' => 'custom', 'extaddr_custom' => '{{ ingress_vip }}', 'extaddr_port' => '80')
+                  )),
+                  'backend_serverpool' => 'okd-http-backend'
+              ),
+              array(
+                  'id' => '203',
+                  'name' => 'okd-https-frontend',
+                  'desc' => 'OKD HTTPS Ingress Frontend',
+                  'status' => 'active',
+                  'type' => 'tcp',
+                  'a_extaddr' => array('item' => array(
+                      array('extaddr' => 'custom', 'extaddr_custom' => '{{ ingress_vip }}', 'extaddr_port' => '443')
+                  )),
+                  'backend_serverpool' => 'okd-https-backend'
+              )
+          );
+
+          // Replace all frontends
+          $config['installedpackages']['haproxy']['ha_backends']['item'] = $frontends;
+
+          // Write config
+          write_config("OKD HAProxy frontends configured via Ansible");
+
+          // Reload HAProxy
+          $savemsg = "";
+          haproxy_check_and_run($savemsg, true);
+
+          if (empty($savemsg)) {
+              echo "OK: HAProxy frontends configured successfully\n";
+          } else {
+              echo "WARNING: HAProxy reload message: $savemsg\n";
+          }
+      register: frontend_result
+      changed_when: "'OK:' in (frontend_result.stdout | default('')) or 'WARNING:' in (frontend_result.stdout | default(''))"
+      failed_when: false
+
+    - name: Display frontend configuration result
+      ansible.builtin.debug:
+        msg: "{{ frontend_result.stdout | default('Frontend configuration completed') }}"
+
+    - name: Verify HAProxy is running
+      pfsensible.core.pfsense_phpshell:
+        cmd: |
+          $running = shell_exec("pgrep haproxy");
+          if (!empty(trim($running))) {
+              echo "OK: HAProxy is running (PID: " . trim($running) . ")\n";
+          } else {
+              echo "ERROR: HAProxy is not running\n";
+              exit(1);
+          }
+      register: haproxy_status
+      changed_when: false
+
+    - name: Display HAProxy status
+      ansible.builtin.debug:
+        msg: "{{ haproxy_status.stdout | default('HAProxy status check completed') }}"
+
+    - name: Restart HAProxy to apply configuration
+      ansible.builtin.raw: /usr/local/sbin/pfSsh.php playback svc restart haproxy
+      register: haproxy_restart
+      changed_when: true
+
+    - name: Wait for HAProxy to start
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Ensure VIPs are applied to interface
+      pfsensible.core.pfsense_phpshell:
+        cmd: |
+          require_once("config.inc");
+          require_once("interfaces.inc");
+
+          global $config;
+
+          $api_vip = '{{ api_vip }}';
+          $ingress_vip = '{{ ingress_vip }}';
+
+          // Get the real interface name for opt1 (MGMT_DEVOPS)
+          $real_if = get_real_interface('opt1');
+          if (empty($real_if)) {
+              $real_if = 'vtnet1';  // fallback
+          }
+
+          // Check if VIPs are active
+          $ifconfig = shell_exec("ifconfig -a");
+          $api_active = strpos($ifconfig, $api_vip) !== false;
+          $ingress_active = strpos($ifconfig, $ingress_vip) !== false;
+
+          if (!$api_active) {
+              shell_exec("ifconfig $real_if alias $api_vip/32");
+              echo "Applied API VIP: $api_vip to $real_if\n";
+          } else {
+              echo "API VIP already active: $api_vip\n";
+          }
+
+          if (!$ingress_active) {
+              shell_exec("ifconfig $real_if alias $ingress_vip/32");
+              echo "Applied Ingress VIP: $ingress_vip to $real_if\n";
+          } else {
+              echo "Ingress VIP already active: $ingress_vip\n";
+          }
+
+          echo "OK: VIPs verified\n";
+      register: vip_apply_result
+      changed_when: "'Applied' in (vip_apply_result.stdout | default(''))"
+
+    - name: Display VIP status
+      ansible.builtin.debug:
+        msg: "{{ vip_apply_result.stdout_lines | default(['VIPs configured']) }}"
+
+    - name: Verify HAProxy is listening on VIPs
+      ansible.builtin.raw: netstat -an | grep -E '(6443|22623).*LISTEN' | head -5
+      register: haproxy_final_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display final HAProxy status
+      ansible.builtin.debug:
+        msg: |
+          HAProxy listening status:
+          {{ haproxy_final_check.stdout | default('Check completed') }}
+
+# =============================================================================
+# COMPLETION MESSAGE
+# =============================================================================
+- name: Display completion message
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Load node IPs from file
+      ansible.builtin.include_vars:
+        file: "{{ okd_install_dir }}/node-ips.yml"
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "VMs Deployed Successfully!"
+          - "=============================================="
+          - "Master IPs: {{ master_ips }}"
+          - "Rendezvous IP: {{ rendezvous_ip }}"
+          - ""
+          - "HAProxy configured on pfSense:"
+          - "  API VIP: {{ api_vip }}:6443"
+          - "  Machine Config VIP: {{ api_vip }}:22623"
+          - "  Ingress HTTP VIP: {{ ingress_vip }}:80"
+          - "  Ingress HTTPS VIP: {{ ingress_vip }}:443"
+          - ""
+          - "VMs are booting from agent ISO..."
+          - "Next step: Run 05-wait-install.yml to monitor installation"
+          - "=============================================="

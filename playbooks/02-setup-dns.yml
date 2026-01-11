@@ -1,0 +1,78 @@
+---
+# 02-setup-dns.yml - Configure DNS records for OKD cluster
+#
+# This playbook calls the CoreDNS update playbook to add OKD DNS records.
+# DNS records required for OKD IPI:
+#   - api.<cluster>.<domain>     -> API VIP
+#   - api-int.<cluster>.<domain> -> API VIP (internal)
+#   - *.apps.<cluster>.<domain>  -> Ingress VIP
+#
+# Usage:
+#   ansible-playbook playbooks/02-setup-dns.yml -e @vars/okd-ipi.yml
+
+- name: Setup DNS for OKD Cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # Note: vars are passed via -e @vars/okd-agent.yml from site.yml
+
+  tasks:
+    - name: Display DNS configuration
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "OKD DNS Setup"
+          - "=============================================="
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - "API VIP: {{ api_vip }}"
+          - "Ingress VIP: {{ ingress_vip }}"
+          - "DNS Server: {{ dns_server }}"
+          - "=============================================="
+
+    - name: Run CoreDNS update playbook
+      ansible.builtin.command:
+        cmd: >
+          ansible-playbook
+          -i /root/learning/cluster/coredns/inventory.ini
+          /root/learning/cluster/coredns/playbooks/update-okd-dns.yml
+          -e okd_cluster_name={{ cluster_name }}
+          -e okd_api_vip={{ api_vip }}
+          -e okd_ingress_vip={{ ingress_vip }}
+          -e okd_dns_state=present
+      register: dns_update
+      changed_when: "'changed' in dns_update.stdout"
+
+    - name: Display DNS update output
+      ansible.builtin.debug:
+        var: dns_update.stdout_lines
+      when: dns_update.stdout_lines is defined
+
+    - name: Wait for DNS propagation
+      ansible.builtin.pause:
+        seconds: 5
+        prompt: "Waiting for DNS to propagate..."
+
+    - name: Verify API DNS record
+      ansible.builtin.command:
+        cmd: "dig @{{ dns_server }} api.{{ cluster_name }}.{{ base_domain }} +short"
+      register: api_dns
+      changed_when: false
+      failed_when: api_dns.stdout == ""
+
+    - name: Verify Ingress wildcard DNS record
+      ansible.builtin.command:
+        cmd: "dig @{{ dns_server }} test.apps.{{ cluster_name }}.{{ base_domain }} +short"
+      register: apps_dns
+      changed_when: false
+      failed_when: apps_dns.stdout == ""
+
+    - name: Display verification results
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "DNS Verification Results"
+          - "=============================================="
+          - "api.{{ cluster_name }}.{{ base_domain }} -> {{ api_dns.stdout }}"
+          - "*.apps.{{ cluster_name }}.{{ base_domain }} -> {{ apps_dns.stdout }}"
+          - "=============================================="

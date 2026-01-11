@@ -1,0 +1,185 @@
+<?php
+/**
+ * pfSense HAProxy Configuration for OKD
+ *
+ * This script configures HAProxy backends and frontends for OKD cluster:
+ *   - API (6443) -> master nodes
+ *   - Machine Config (22623) -> master nodes
+ *   - Ingress HTTP (80) -> ingress nodes
+ *   - Ingress HTTPS (443) -> ingress nodes
+ */
+
+require_once("config.inc");
+require_once("haproxy/haproxy.inc");
+
+// Load current config
+global $config;
+
+// Initialize haproxy config if not exists
+if (!isset($config['installedpackages']['haproxy'])) {
+    $config['installedpackages']['haproxy'] = array();
+}
+
+// =============================================================================
+// BACKEND SERVERS
+// =============================================================================
+
+// Master/Control Plane backends
+$master_backends = array(
+{% for node in master_nodes %}
+    array(
+        'name' => '{{ cluster_name }}-{{ node.name }}',
+        'address' => '{{ node.ip | default("") }}',
+        'status' => 'active'
+    ),
+{% endfor %}
+);
+
+// Ingress backends (workers if defined, otherwise masters)
+$ingress_backends = array(
+{% if worker_nodes | length > 0 %}
+{% for node in worker_nodes %}
+    array(
+        'name' => '{{ cluster_name }}-{{ node.name }}',
+        'address' => '{{ node.ip | default("") }}',
+        'status' => 'active'
+    ),
+{% endfor %}
+{% else %}
+{% for node in master_nodes %}
+    array(
+        'name' => '{{ cluster_name }}-{{ node.name }}',
+        'address' => '{{ node.ip | default("") }}',
+        'status' => 'active'
+    ),
+{% endfor %}
+{% endif %}
+);
+
+// =============================================================================
+// BACKEND POOLS CONFIGURATION
+// =============================================================================
+
+$backend_pools = array(
+    // API Backend (6443)
+    array(
+        'name' => 'okd-api-backend',
+        'balance' => 'roundrobin',
+        'mode' => 'tcp',
+        'check_type' => 'SSL',
+        'checkport' => '6443',
+        'servers' => $master_backends,
+        'port' => '6443'
+    ),
+    // Machine Config Backend (22623)
+    array(
+        'name' => 'okd-machine-config-backend',
+        'balance' => 'roundrobin',
+        'mode' => 'tcp',
+        'check_type' => 'SSL',
+        'checkport' => '22623',
+        'servers' => $master_backends,
+        'port' => '22623'
+    ),
+    // Ingress HTTP Backend (80)
+    array(
+        'name' => 'okd-ingress-http-backend',
+        'balance' => 'roundrobin',
+        'mode' => 'tcp',
+        'check_type' => 'HTTP',
+        'checkport' => '80',
+        'servers' => $ingress_backends,
+        'port' => '80'
+    ),
+    // Ingress HTTPS Backend (443)
+    array(
+        'name' => 'okd-ingress-https-backend',
+        'balance' => 'roundrobin',
+        'mode' => 'tcp',
+        'check_type' => 'SSL',
+        'checkport' => '443',
+        'servers' => $ingress_backends,
+        'port' => '443'
+    )
+);
+
+// =============================================================================
+// FRONTEND CONFIGURATION
+// =============================================================================
+
+$frontends = array(
+    // API Frontend
+    array(
+        'name' => 'okd-api-frontend',
+        'bind_address' => '{{ api_vip }}',
+        'bind_port' => '6443',
+        'mode' => 'tcp',
+        'default_backend' => 'okd-api-backend'
+    ),
+    // Machine Config Frontend
+    array(
+        'name' => 'okd-machine-config-frontend',
+        'bind_address' => '{{ api_vip }}',
+        'bind_port' => '22623',
+        'mode' => 'tcp',
+        'default_backend' => 'okd-machine-config-backend'
+    ),
+    // Ingress HTTP Frontend
+    array(
+        'name' => 'okd-ingress-http-frontend',
+        'bind_address' => '{{ ingress_vip }}',
+        'bind_port' => '80',
+        'mode' => 'tcp',
+        'default_backend' => 'okd-ingress-http-backend'
+    ),
+    // Ingress HTTPS Frontend
+    array(
+        'name' => 'okd-ingress-https-frontend',
+        'bind_address' => '{{ ingress_vip }}',
+        'bind_port' => '443',
+        'mode' => 'tcp',
+        'default_backend' => 'okd-ingress-https-backend'
+    )
+);
+
+// =============================================================================
+// APPLY CONFIGURATION
+// =============================================================================
+
+// Remove existing OKD backends/frontends
+if (isset($config['installedpackages']['haproxy']['ha_backends']['item'])) {
+    $config['installedpackages']['haproxy']['ha_backends']['item'] = array_filter(
+        $config['installedpackages']['haproxy']['ha_backends']['item'],
+        function($b) { return strpos($b['name'], 'okd-') !== 0; }
+    );
+}
+
+if (isset($config['installedpackages']['haproxy']['ha_pools']['item'])) {
+    $config['installedpackages']['haproxy']['ha_pools']['item'] = array_filter(
+        $config['installedpackages']['haproxy']['ha_pools']['item'],
+        function($p) { return strpos($p['name'], 'okd-') !== 0; }
+    );
+}
+
+// Add new configuration
+foreach ($backend_pools as $pool) {
+    $config['installedpackages']['haproxy']['ha_pools']['item'][] = $pool;
+}
+
+foreach ($frontends as $frontend) {
+    $config['installedpackages']['haproxy']['ha_backends']['item'][] = $frontend;
+}
+
+// Enable HAProxy
+$config['installedpackages']['haproxy']['enable'] = 'on';
+
+// Write config
+write_config("OKD HAProxy configuration applied");
+
+// Restart HAProxy
+haproxy_configure();
+
+echo "Configuration applied successfully\n";
+echo "API VIP: {{ api_vip }}:6443\n";
+echo "Ingress VIP: {{ ingress_vip }}:443\n";
+?>

@@ -1,0 +1,88 @@
+---
+# site.yml - OKD Agent-based Installation on oVirt
+#
+# This master playbook orchestrates the full OKD installation using the
+# Agent-based Installer approach. This avoids the keepalived bootstrap
+# issues present in the oVirt IPI installer.
+#
+# Architecture:
+#   - VMs boot from agent ISO (self-contained installer)
+#   - pfSense HAProxy provides VIPs (API, Ingress)
+#   - No external bootstrap dependencies
+#
+# =============================================================================
+# INFRASTRUCTURE DEPENDENCIES (must be set up before running this playbook)
+# =============================================================================
+#
+# 1. oVirt Engine - /root/learning/ovirt-setup/playbooks/ovirt/
+#    cd /root/learning/ovirt-setup && ansible-playbook playbooks/ovirt/site.yml
+#
+# 2. oVirt Networks - /root/learning/ovirt-setup/playbooks/network/
+#    cd /root/learning/ovirt-setup && ansible-playbook playbooks/network/create_networks.yml
+#
+# 3. pfSense VM - /root/learning/ovirt-setup/playbooks/network/
+#    cd /root/learning/ovirt-setup && ansible-playbook playbooks/network/install_pfsense.yml
+#    cd /root/learning/ovirt-setup && ansible-playbook playbooks/network/post_install_pfsense.yml
+#
+# 4. Kubernetes Cluster - /root/learning/cluster/k8s-bstrp/
+#    cd /root/learning/cluster/k8s-bstrp && ansible-playbook -i inventory/hosts.ini bootstrap-k8s.yml
+#
+# 5. CoreDNS - /root/learning/cluster/coredns/
+#    cd /root/learning/cluster/coredns && ansible-playbook -i inventory.ini deploy-coredns.yml
+#
+# 6. pull-secret.json - Download from https://console.redhat.com/openshift/install/pull-secret
+#    Or for OKD: echo '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}' > pull-secret.json
+#
+# =============================================================================
+# USAGE
+# =============================================================================
+#
+# Full installation (single command - all automated):
+#   ansible-playbook site.yml -e @vars/okd-agent.yml
+#
+# Run specific phases:
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags prerequisites
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags pfsense    # VIPs + HAProxy
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags haproxy    # HAProxy frontends only
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags dns
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags iso
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags deploy
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags wait
+#   ansible-playbook site.yml -e @vars/okd-agent.yml --tags post-install  # OperatorHub + summary
+#
+# Destroy cluster:
+#   ansible-playbook playbooks/00-destroy-cluster.yml -e @vars/okd-agent.yml -e confirm_destroy=true
+#
+# =============================================================================
+
+- name: "OKD Agent Installation - Prerequisites"
+  ansible.builtin.import_playbook: playbooks/01-prerequisites.yml
+  tags: [prerequisites, all]
+
+- name: "OKD Agent Installation - Setup pfSense (VIPs + HAProxy Global)"
+  ansible.builtin.import_playbook: playbooks/00-setup-pfsense.yml
+  tags: [pfsense, all]
+
+- name: "OKD Agent Installation - Configure HAProxy Backends/Frontends"
+  ansible.builtin.import_playbook: playbooks/02a-setup-haproxy.yml
+  tags: [haproxy, pfsense, all]
+
+- name: "OKD Agent Installation - DNS Setup"
+  ansible.builtin.import_playbook: playbooks/02-setup-dns.yml
+  tags: [dns, all]
+
+- name: "OKD Agent Installation - Generate Agent ISO"
+  ansible.builtin.import_playbook: playbooks/03-generate-agent-iso.yml
+  tags: [iso, all]
+
+- name: "OKD Agent Installation - Deploy VMs"
+  ansible.builtin.import_playbook: playbooks/04-deploy-vms.yml
+  tags: [deploy, all]
+
+- name: "OKD Agent Installation - Wait for Installation"
+  ansible.builtin.import_playbook: playbooks/05-wait-install.yml
+  tags: [wait, all]
+
+- name: "OKD Agent Installation - Post-Install Configuration"
+  ansible.builtin.import_playbook: playbooks/06-post-install.yml
+  tags: [post-install, all]
