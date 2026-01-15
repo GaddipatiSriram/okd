@@ -319,6 +319,9 @@
               );
           }
 
+          // Enable HAProxy service
+          $config['installedpackages']['haproxy']['enable'] = 'on';
+
           write_config("OKD HAProxy frontends configured via Ansible");
           $savemsg = '';
           haproxy_check_and_run($savemsg, true);
