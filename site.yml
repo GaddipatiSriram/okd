@@ -86,3 +86,7 @@
 - name: "OKD Agent Installation - Post-Install Configuration"
   ansible.builtin.import_playbook: playbooks/06-post-install.yml
   tags: [post-install, all]
+
+- name: "OKD Agent Installation - Install GitOps (ArgoCD sre + devops)"
+  ansible.builtin.import_playbook: playbooks/07-install-argocd.yml
+  tags: [argocd, gitops, all]

@@ -1,0 +1,44 @@
+---
+- name: Start all OKD VMs
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Authenticate to oVirt Engine
+      ovirt.ovirt.ovirt_auth:
+        url: "{{ ovirt_engine_url }}"
+        username: "{{ ovirt_engine_user }}"
+        password: "{{ ovirt_engine_password }}"
+        insecure: "{{ ovirt_engine_insecure }}"
+      register: ovirt_auth
+
+    - name: Start master VMs
+      ovirt.ovirt.ovirt_vm:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        name: "{{ cluster_name }}-{{ item.name }}"
+        state: running
+        wait: true
+      loop: "{{ master_nodes + worker_nodes }}"
+      loop_control:
+        label: "{{ cluster_name }}-{{ item.name }}"
+
+    - name: Report VM status
+      ovirt.ovirt.ovirt_vm_info:
+        auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"
+        pattern: "name={{ cluster_name }}-{{ item.name }}"
+      register: vm_status
+      loop: "{{ master_nodes + worker_nodes }}"
+      loop_control:
+        label: "{{ cluster_name }}-{{ item.name }}"
+
+    - name: Display VM status
+      ansible.builtin.debug:
+        msg: "{{ item.ovirt_vms[0].name }}: {{ item.ovirt_vms[0].status }}"
+      loop: "{{ vm_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Revoke oVirt auth
+      ovirt.ovirt.ovirt_auth:
+        state: absent
+        ovirt_auth: "{{ ovirt_auth.ansible_facts.ovirt_auth }}"

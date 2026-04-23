@@ -1,0 +1,250 @@
+---
+# 07-install-argocd.yml - Install OpenShift GitOps operator and two ArgoCD instances
+#
+# Creates the GitOps control plane for the homelab:
+#   - openshift-gitops-operator (via Subscription in openshift-operators)
+#   - argocd-sre      (namespace argocd-sre)     — platform/infra apps
+#   - argocd-devops   (namespace argocd-devops)  — application workloads
+#
+# Each ArgoCD CR has spec.applicationSet enabled so the ApplicationSet
+# controller is deployed — required for cluster-generator AppSets used by
+# forge/, dev-*/ etc.
+#
+# Idempotent: re-running patches existing CRs to the desired state.
+#
+# Prerequisites:
+#   - OKD cluster up, kubeconfig at install/auth/kubeconfig
+#
+# Usage:
+#   ansible-playbook playbooks/07-install-argocd.yml -e @vars/okd-agent.yml
+
+- name: Install OpenShift GitOps + ArgoCD instances (sre + devops)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ okd_install_dir }}/auth/kubeconfig"
+    argocd_instances:
+      - name: argocd-sre
+        namespace: argocd-sre
+        description: "Platform/infra apps (cert-manager, Vault, ingress, ESO, operators)"
+      - name: argocd-devops
+        namespace: argocd-devops
+        description: "Application workloads (dev-* clusters, business apps)"
+
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+
+  tasks:
+    # =========================================================================
+    # Verify prerequisites
+    # =========================================================================
+    - name: Verify kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ kubeconfig_path }}"
+      register: kubeconfig_stat
+
+    - name: Fail if kubeconfig not found
+      ansible.builtin.fail:
+        msg: "kubeconfig not found at {{ kubeconfig_path }}. Is the OKD cluster installed?"
+      when: not kubeconfig_stat.stat.exists
+
+    - name: Display plan
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "Install GitOps operator + two ArgoCD instances"
+          - "=============================================="
+          - "Operator:        openshift-gitops-operator (latest)"
+          - "Instances:"
+          - "  - argocd-sre     → {{ argocd_instances[0].description }}"
+          - "  - argocd-devops  → {{ argocd_instances[1].description }}"
+          - "ApplicationSet:  enabled on both"
+          - "=============================================="
+
+    # =========================================================================
+    # Install the OpenShift GitOps operator via OLM Subscription
+    # =========================================================================
+    - name: Create OpenShift GitOps Subscription
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | {{ oc_binary }} apply -f -
+        apiVersion: operators.coreos.com/v1alpha1
+        kind: Subscription
+        metadata:
+          name: openshift-gitops-operator
+          namespace: openshift-operators
+        spec:
+          channel: latest
+          installPlanApproval: Automatic
+          name: openshift-gitops-operator
+          source: community-operators
+          sourceNamespace: openshift-marketplace
+        EOF
+      register: subscription_apply
+      changed_when: "'created' in subscription_apply.stdout or 'configured' in subscription_apply.stdout"
+
+    - name: Wait for ArgoCD CRD to become available
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get crd argocds.argoproj.io -o jsonpath='{.metadata.name}'"
+      register: argocd_crd
+      retries: 30
+      delay: 10
+      until: argocd_crd.rc == 0 and argocd_crd.stdout == 'argocds.argoproj.io'
+      changed_when: false
+
+    - name: Wait for ApplicationSet CRD
+      ansible.builtin.command:
+        cmd: "{{ oc_binary }} get crd applicationsets.argoproj.io -o jsonpath='{.metadata.name}'"
+      register: appset_crd
+      retries: 30
+      delay: 10
+      until: appset_crd.rc == 0 and appset_crd.stdout == 'applicationsets.argoproj.io'
+      changed_when: false
+
+    # =========================================================================
+    # Create namespaces + ArgoCD instances
+    # =========================================================================
+    - name: Create ArgoCD namespaces
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<EOF | {{ oc_binary }} apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ item.namespace }}
+          labels:
+            argocd.argoproj.io/managed-by-cluster-argocd: "true"
+        EOF
+      loop: "{{ argocd_instances }}"
+      loop_control:
+        label: "{{ item.namespace }}"
+      register: ns_apply
+      changed_when: "'created' in ns_apply.stdout"
+
+    - name: Create ArgoCD CRs (with ApplicationSet + repo/sso capable)
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<EOF | {{ oc_binary }} apply -f -
+        apiVersion: argoproj.io/v1beta1
+        kind: ArgoCD
+        metadata:
+          name: {{ item.name }}
+          namespace: {{ item.namespace }}
+        spec:
+          # Enable ApplicationSet controller (cluster generator AppSets need this)
+          applicationSet: {}
+
+          # Server exposed via OpenShift Route (passthrough TLS)
+          server:
+            route:
+              enabled: true
+              tls:
+                termination: reencrypt
+                insecureEdgeTerminationPolicy: Redirect
+            insecure: false
+
+          # Give the controller enough budget for multi-cluster workloads
+          controller:
+            resources:
+              limits:
+                cpu: "2"
+                memory: 2Gi
+              requests:
+                cpu: 250m
+                memory: 1Gi
+
+          repo:
+            resources:
+              limits:
+                cpu: "1"
+                memory: 1Gi
+              requests:
+                cpu: 250m
+                memory: 256Mi
+
+          # RBAC defaults — admins are cluster-admins, devs readonly
+          rbac:
+            defaultPolicy: 'role:readonly'
+            policy: |
+              g, system:cluster-admins, role:admin
+            scopes: '[groups]'
+
+          # SSO via OpenShift Dex (uses OKD OAuth by default) — toggle off to
+          # rely only on argocd admin password.
+          sso:
+            provider: dex
+            dex:
+              openShiftOAuth: true
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+        EOF
+      loop: "{{ argocd_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: argocd_apply
+      changed_when: "'created' in argocd_apply.stdout or 'configured' in argocd_apply.stdout"
+
+    - name: Wait for each ArgoCD to reach Available phase
+      ansible.builtin.command:
+        cmd: >
+          {{ oc_binary }} get argocd {{ item.name }} -n {{ item.namespace }}
+          -o jsonpath='{.status.phase}'
+      register: argocd_phase
+      retries: 60
+      delay: 10
+      until: argocd_phase.rc == 0 and argocd_phase.stdout == 'Available'
+      loop: "{{ argocd_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Verify ApplicationSet controller pod is running
+      ansible.builtin.command:
+        cmd: >
+          {{ oc_binary }} get pods -n {{ item.namespace }}
+          -l app.kubernetes.io/name={{ item.name }}-applicationset-controller
+          -o jsonpath='{.items[0].status.phase}'
+      register: appset_pod
+      retries: 30
+      delay: 10
+      until: appset_pod.rc == 0 and appset_pod.stdout == 'Running'
+      loop: "{{ argocd_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    # =========================================================================
+    # Print access info
+    # =========================================================================
+    - name: Get Route URLs
+      ansible.builtin.command:
+        cmd: >
+          {{ oc_binary }} get route {{ item.name }}-server -n {{ item.namespace }}
+          -o jsonpath='{.spec.host}'
+      register: argocd_urls
+      loop: "{{ argocd_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Display ArgoCD access info
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "ArgoCD Install Complete"
+          - "=============================================="
+          - "Instances (admin user, password in <instance>-cluster Secret):"
+          - "  - {{ argocd_urls.results[0].item.name }}  https://{{ argocd_urls.results[0].stdout }}"
+          - "  - {{ argocd_urls.results[1].item.name }}  https://{{ argocd_urls.results[1].stdout }}"
+          - ""
+          - "Fetch admin password:"
+          - "  oc extract secret/{{ argocd_instances[0].name }}-cluster -n {{ argocd_instances[0].namespace }} --to=- --keys=admin.password"
+          - "  oc extract secret/{{ argocd_instances[1].name }}-cluster -n {{ argocd_instances[1].namespace }} --to=- --keys=admin.password"
+          - ""
+          - "ApplicationSet controller: enabled on both"
+          - "=============================================="

@@ -88,7 +88,9 @@ okd/
 │   ├── 03-generate-agent-iso.yml  # Generate agent installer ISO
 │   ├── 04-deploy-vms.yml          # Create VMs and boot from ISO
 │   ├── 05-wait-install.yml        # Wait for cluster installation
-│   └── 06-post-install.yml        # Post-install configuration
+│   ├── 06-post-install.yml        # Post-install configuration
+│   ├── 07-install-argocd.yml      # Install OpenShift GitOps + ArgoCD (sre + devops)
+│   └── start-vms.yml              # Utility: power on all master/worker VMs
 ├── templates/
 │   ├── install-config.yaml.j2     # Install config template
 │   └── agent-config.yaml.j2       # Agent config template
@@ -196,6 +198,7 @@ The `site.yml` master playbook orchestrates all phases in order:
 | 5 | `04-deploy-vms.yml` | deploy | Create VMs on oVirt, boot from ISO |
 | 6 | `05-wait-install.yml` | wait | Monitor bootstrap & installation |
 | 7 | `06-post-install.yml` | post-install | Configure OperatorHub, verify cluster |
+| 8 | `07-install-argocd.yml` | argocd, gitops | Install OpenShift GitOps operator + ArgoCD instances (`argocd-sre`, `argocd-devops`) |
 
 ## HAProxy Configuration
 
@@ -304,22 +307,28 @@ The post-install playbook automatically prints credentials at the end of install
 
 ### ArgoCD Credentials
 
-ArgoCD is deployed in the `argo` namespace.
+Phase 8 (`07-install-argocd.yml`) installs the OpenShift GitOps operator and
+two ArgoCD instances, each in its own namespace:
 
-| Access | Value |
-|--------|-------|
-| URL | `https://argocd-server-argo.apps.mgmt-devops-okd.engatwork.com` |
-| Username | `admin` |
-| Password | Retrieved from secret (see below) |
+| Instance        | Namespace       | Purpose                                                          |
+|-----------------|-----------------|------------------------------------------------------------------|
+| `argocd-sre`    | `argocd-sre`    | Platform/infra apps (cert-manager, Vault, ingress, ESO, operators) |
+| `argocd-devops` | `argocd-devops` | Application workloads (dev-* clusters, business apps)            |
 
-#### Fetching ArgoCD Password
+Each is exposed via a reencrypt Route. Dex SSO is enabled against the cluster's
+OAuth server, and the ApplicationSet controller is enabled on both so
+cluster-generator AppSets (used by `forge/`, `dev-*/` repos) work out of the box.
+
+#### Fetching ArgoCD URLs and Admin Passwords
 
 ```bash
-# Get ArgoCD admin password
-oc extract secret/argocd-cluster -n argo --to=-
+# URLs
+oc get route argocd-sre-server -n argocd-sre -o jsonpath='{.spec.host}'; echo
+oc get route argocd-devops-server -n argocd-devops -o jsonpath='{.spec.host}'; echo
 
-# Or using kubectl
-kubectl get secret argocd-cluster -n argo -o jsonpath='{.data.admin\.password}' | base64 -d; echo
+# Admin passwords (username is 'admin')
+oc extract secret/argocd-sre-cluster    -n argocd-sre    --to=- --keys=admin.password
+oc extract secret/argocd-devops-cluster -n argocd-devops --to=- --keys=admin.password
 ```
 
 ## Troubleshooting
